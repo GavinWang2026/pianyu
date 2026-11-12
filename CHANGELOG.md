@@ -1,5 +1,54 @@
 # Changelog
 
+## v2.0.0-r4 · 发布前核查（2026-11-12）
+
+项目负责人 拍板「先走 1 + 2」：① 补 Cookie 打通抖音全链；② 发布前核查包。
+
+### ① 抖音全链：工程侧收口，凭据侧仍阻塞
+- 只读实测本机凭据源：Safari Cookie 库存在但被 macOS TCC 拒绝
+  (`Operation not permitted`)；Chrome / Edge / Firefox / Brave profile 全部不存在；
+  包内 `cookies/` 无凭据、无 `AVD_COOKIE_FILE`。**不绕系统权限、不绕平台风控**。
+- 新增 `cookies/导出指引.md`：三条正当获取路径、TCC 授权步骤、Netscape 格式、
+  交付前清理；明确拒绝伪造 `s_v_web_id` / 模拟验证挑战等做法。
+- 新增 `cookies/cookie_doctor.py`：体检文件位置 / 格式 / 域 / `s_v_web_id` /
+  过期 / gitignore，**绝不回显 Cookie 值**；`--selftest` 用内存合成数据验证解析逻辑，
+  `--probe` 调真实诊断接口。实测合成自检通过、真实体检准确报缺。
+- 新增 `run_douyin_e2e.py`：服务自检 → `ready` 判定 → 启动流水线 → 轮询 →
+  取 MD/SRT/TXT/JSON → 写 `manifest.json` 证据。`ready=false` 时**不伪造成功**，
+  写 `evidence/douyin-e2e/BLOCKED.md` 并以退出码 2 结束。
+- 实测 `--dry-run` 返回 `COOKIE_REQUIRED` + 5 条动作，阻塞证据已落盘。
+  **抖音完整出稿仍未跑通，等 项目负责人 提供新鲜 Cookie。**
+
+### ② 在线 CVE 核查（两个独立源 + 修复点核验）
+- `cve_scan.py`：从包内 `METADATA` / `version.py` 读 9 个组件，向 OSV API 做
+  精确版本查询 + 包级历史查询。结果 9/9 精确 0 命中，历史漏洞合计 42 条
+  （yt-dlp 22 / numpy 16 / tqdm 4）。
+- `cve_crosscheck.py`：逐条拉取历史漏洞详情，收集 `fixed` 版本比对。
+  **yt-dlp 2026.10.26 晚于全部已知修复点（最新 2026.7.4）**；numpy / tqdm 同理。
+  6 个包 OSV 无收录（数据空白，非「零漏洞」）。
+  过程中修正自身两个 bug：把 GIT commit hash 当版本号比较、
+  把「无历史记录」误标为「有漏洞但无修复点」。
+- `pypi_advisory_check.py`：第二独立源 PyPI Advisory（PyPI JSON API），
+  带 `requests 2.31.0` **阳性对照**（命中 6 条，证明查询链路有效）；
+  随包 9 个组件 0 条。
+- `pip-audit` 安装成功但 `-r` 模式需建 venv，`ensurepip` 被沙箱中断
+  （SIGABRT），**未产出结果、不记作已执行**，改用等价只读接口。
+- Trivy / Grype：本机无二进制、无 brew、GitHub Releases 不可达（HTTP 000），
+  **仍未执行**，放行清单保持未闭环。
+
+### ③ 许可与权属
+- 新增 `内部核查清单-待确认.md`：12 项待确认问题（Q1–Q12）、
+  组件许可事实矩阵、证据清单、**空白签署栏**。明确「未签署、不构成法律意见」。
+- `set_git_identity.sh` 加固：默认 dry-run，需 `--apply`；拒绝占位主体 /
+  示例邮箱 / 非法邮箱；支持 `--name` / `--email`。实测 4 种输入均按预期拦截，
+  `git config` 未被改动。**真实仓库主体仍需 项目负责人 提供。**
+
+### ④ 同步
+- `SCA-供应链清单.md` §5 更正「未联网调用 CVE 数据库」；
+  CI 增加离线证据可重生成校验；`VERSION` / `README-FLAGSHIP.md` /
+  `内部条目清单` 同步到 r4。
+- 新增 `AVD-Flagship-v2_发布前核查复评v4.html`（本轮正式报告）。
+
 ## v2.0.0 · 旗舰版（2026-11-12）
 
 从「两个独立程序」合成为「一个发布包、一个进程、一个版本」。

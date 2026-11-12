@@ -1,13 +1,41 @@
-# AVD Flagship v2.0.0 · 素材工作台旗舰版（r3 · P0–P2 闭环版）
+# AVD Flagship v2.0.0 · 素材工作台旗舰版（r4 · 发布前核查版）
 
 **一个发布包、一个进程、一个版本。** AVD 自研工作台 + 原样内嵌的 yt-dlp 2026.10.26，
 通过一层融合层接成「一次解析、全链复用」的产线。上游一行未改，项目负责人 设计的 UI
 与「视频 → 声音 → 文字」编排原封不动。
 
-> 当前准确口径见 **`AVD-Flagship-v2_缺陷闭环复评v3.html`** 与
-> `内部闭环记录（未入库）`；上一版验收报告与初版说明均已标注为「由 r3 修订取代」。
+> 当前准确口径见 **`AVD-Flagship-v2_发布前核查复评v4.html`**（最新）与
+> `AVD-Flagship-v2_缺陷闭环复评v3.html`；r2 验收报告与初版说明
+> 均已标注为「由 r3 / r4 修订取代」。
 > 自研源码 **12,482 行**（A 5,500 / B 3,643 / D 3,339），逐文件归属见 `作者信息`；
 > 第三方边界见 `NOTICE.md` 与 `SCA-供应链清单.md`。
+
+---
+
+## 0. r4 本轮新增（发布前核查）
+
+| 方向 | 产出 | 状态 |
+|---|---|---|
+| 抖音全链 | `cookies/导出指引.md`、`cookies/cookie_doctor.py`、`run_douyin_e2e.py` | 工程侧闭环；**凭据侧阻塞**（本机无可用 Cookie） |
+| 在线 CVE | `cve_scan.py`（OSV）、`cve_crosscheck.py`（修复点）、`pypi_advisory_check.py`（PyPI Advisory + 阳性对照） | ✅ 已执行，9 组件两源 0 命中 |
+| 许可 | `内部核查清单-待确认.md`（Q1–Q12 + 空白签署栏） | ⚠️ **未签署，不构成法律意见** |
+| 权属 | `set_git_identity.sh` 默认 dry-run + 拒绝占位主体 | ⚠️ 待 项目负责人 给真实仓库主体 |
+
+```bash
+# 在线核查复现（组件清单从包内 METADATA 自动读取，不硬编码）
+python3 cve_scan.py && python3 cve_crosscheck.py && python3 pypi_advisory_check.py
+
+# Cookie 侧
+python3 cookies/cookie_doctor.py --selftest
+python3 run_douyin_e2e.py --dry-run
+
+# 许可 / 权属（只预演，不代签、不编造主体）
+cat 内部核查清单-待确认.md
+./set_git_identity.sh --name '真实主体' --email 'legal@company.com'
+```
+
+> **不可宣称**：已通过安全审计 / 零漏洞 / 已跑 Trivy 与 Grype / 已完成许可审核 /
+> 抖音链路已验收。准确边界见 v4 报告「方法论坦白」与「放行 Gap」。
 
 ---
 

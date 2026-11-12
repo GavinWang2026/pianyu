@@ -53,6 +53,22 @@ jobs:
       - name: Supply-chain inventory
         run: python sca_report.py --check
 
+      - name: Offline CVE evidence is reproducible
+        # 只重生成报告、校验随仓库提交的原始证据，不在 CI 里联网查漏洞库
+        run: |
+          python cve_scan.py --offline
+          python cve_crosscheck.py --offline
+          python pypi_advisory_check.py --offline
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for name in ('cve_osv_raw.json', 'cve_crosscheck.json', 'pypi_advisory_raw.json'):
+              data = json.loads(Path(name).read_text(encoding='utf-8'))
+              assert data.get('generated_at'), name
+              assert data.get('results'), name
+              print('  OK', name, len(data['results']), 'components')
+          PY
+
       - name: HTML deliverables are well-formed and offline
         run: |
           python - <<'PY'
