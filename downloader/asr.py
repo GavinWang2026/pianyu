@@ -289,10 +289,22 @@ class AsrManager:
         if not task or task.stage in TERMINAL_STAGES:
             return False
         if proc is not None and proc.poll() is None:
+            def _reap(child: subprocess.Popen) -> None:
+                try:
+                    child.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    try:
+                        child.kill()
+                        child.wait(timeout=3)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+
             try:
                 proc.terminate()
             except OSError:
                 pass
+            threading.Thread(target=_reap, args=(proc,), daemon=True,
+                             name=f"avd-asr-reap-{task_id}").start()
         self._patch(task, stage="cancelled", message="已取消", finished_at=time.time())
         return True
 
@@ -568,7 +580,14 @@ class AsrManager:
                     proc.kill()
                 except OSError:
                     pass
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
             reader.join(timeout=2)
 
         if task.stage in TERMINAL_STAGES:

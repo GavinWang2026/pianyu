@@ -36,7 +36,12 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent
 ENV = APP_DIR / ".venv-asr"
 PY_TAG = "python3.13"
-SITE_REL = Path("lib") / PY_TAG / "site-packages"
+IS_WINDOWS = os.name == "nt"
+# Windows venv 布局是 Scripts/python.exe + Lib/site-packages；
+# 且 macOS 的 cp313-darwin 原生扩展不可跨平台复用，必须另装 Win 版运行时。
+VENV_PY = Path("Scripts") / "python.exe" if IS_WINDOWS else Path("bin") / "python"
+SITE_REL = (Path("Lib") / "site-packages" if IS_WINDOWS
+            else Path("lib") / PY_TAG / "site-packages")
 RUNTIME_SITE = APP_DIR / "runtime" / "site-packages"
 REL_LINK = Path("..") / ".." / ".." / "runtime" / "site-packages"
 
@@ -65,6 +70,16 @@ def find_python313() -> list[tuple[Path, str]]:
         hit = shutil.which(name)
         if hit:
             candidates.append(Path(hit))
+    if IS_WINDOWS:
+        try:  # Windows 官方 py 启动器可直接定位 3.13
+            launcher = subprocess.run(
+                ["py", "-3.13", "-c", "import sys; print(sys.executable)"],
+                capture_output=True, text=True, timeout=8, check=False,
+            )
+            if launcher.returncode == 0 and launcher.stdout.strip():
+                candidates.append(Path(launcher.stdout.strip()))
+        except (OSError, subprocess.SubprocessError):
+            pass
     for path in candidates:
         key = str(path.resolve())
         if key in seen:
@@ -94,7 +109,7 @@ def find_site_source(explicit: str | None = None) -> Path | None:
 
 
 def _probe_env() -> dict[str, Any]:
-    py = ENV / "bin" / "python"
+    py = ENV / VENV_PY
     exists = py.exists() and os.access(str(py), os.X_OK)
     result: dict[str, Any] = {
         "env_dir": str(ENV),
@@ -146,9 +161,11 @@ def check() -> dict[str, Any]:
             "runtime_mb": round(runtime_bytes / 1024 / 1024, 1),
             "relative_link": link.is_symlink() and not os.path.isabs(os.readlink(link)),
             "link_target": os.readlink(link) if link.is_symlink() else "(实体目录)",
-            "interpreter_usable": bool((ENV / "bin" / "python").exists()),
-            "native_abi": "cp313-darwin / macOS arm64",
-            "note": "换机器需本机有 Python 3.13；--repair 自动重接解释器；Windows 需另装 ASR 运行时",
+            "interpreter_usable": bool((ENV / VENV_PY).exists()),
+            "native_abi": "cp313-win_amd64（需另装）" if IS_WINDOWS else "cp313-darwin / macOS arm64",
+            "note": ("Windows 需运行 setup-windows-runtime.bat 安装 Win 版依赖；macOS 原生扩展不可复用"
+                     if IS_WINDOWS else
+                     "换机器需本机有 Python 3.13；--repair 自动重接解释器"),
         },
     }
     try:
@@ -165,11 +182,18 @@ def check() -> dict[str, Any]:
 
 def repair(explicit_src: str | None = None, *, force: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {"changed": False, "steps": [], "error": ""}
+    if IS_WINDOWS:
+        result["error"] = (
+            "Windows 请用 setup-windows-runtime.bat 创建 Win 版 ASR 运行时："
+            "包内 runtime/ 是 cp313-darwin 原生扩展，不能跨平台软链复用"
+        )
+        result["asr"] = _probe_env()
+        return result
     if ENV.is_symlink():
         result["steps"].append("包内已有 .venv-asr 符号链接，保持不动")
         result["asr"] = _probe_env()
         return result
-    interpreter_link = ENV / "bin" / "python"
+    interpreter_link = ENV / VENV_PY
     interpreter_ok = interpreter_link.exists() and os.access(str(interpreter_link), os.X_OK)
     if ENV.exists() and not force and interpreter_ok:
         result["steps"].append("包内 .venv-asr 已就绪（解释器可用），未改动")

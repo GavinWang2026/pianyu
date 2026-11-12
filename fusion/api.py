@@ -18,7 +18,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import Any
 
-from . import boot_check, pipeline
+from . import boot_check, engine_opts, pipeline
 from . import PRODUCT_VERSION
 
 _VALID_FORMATS = ("md", "srt", "txt", "json")
@@ -27,10 +27,12 @@ _VALID_FORMATS = ("md", "srt", "txt", "json")
 def handle_get(handler: Any, route: str, query: dict[str, list[str]]) -> bool:
     """返回 True 表示已处理，server.py 应立即 return。"""
     if route == "/api/fusion/health":
+        health = boot_check.health()
+        health["auth"] = engine_opts.cookie_status()
         handler._ok(
             product="AVD Flagship",
             version=PRODUCT_VERSION,
-            health=boot_check.health(),
+            health=health,
         )
         return True
 
@@ -64,6 +66,14 @@ def handle_get(handler: Any, route: str, query: dict[str, list[str]]) -> bool:
 
 
 def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
+    if route == "/api/platform/diagnose":
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            handler._fail("缺少 url", HTTPStatus.BAD_REQUEST)
+        else:
+            handler._ok(**pipeline.diagnose_url(url))
+        return True
+
     if route == "/api/pipeline/start":
         try:
             task = pipeline.manager().start(

@@ -1,0 +1,78 @@
+name: AVD Flagship CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# 说明：vendor/、runtime/、models/ 是随发布包分发的第三方资产，
+# 按 .gitignore 刻意不进源码仓库（让 git 历史保持「自研代码」的干净证据）。
+# 因此 CI 只做不需要二进制资产的检查；需要 ASR 运行时的端到端验收
+# 在交付机上跑 `python verify_e2e.py`（见 PLATFORM_SUPPORT.md）。
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile all self-developed Python
+        run: |
+          python -m compileall -q boot.py doctor.py server.py app.py \
+            fusion downloader tools tests yt_dlp_plugins
+
+      - name: Lint (critical errors only)
+        run: |
+          python -m pip install --quiet ruff
+          ruff check --config ruff.toml boot.py doctor.py server.py fusion tests
+
+      - name: Assemble pinned engine for unit tests
+        # 版本必须与 VERSION / boot_check 的硬校验一致
+        run: |
+          python -m pip download "yt-dlp==2026.10.26" --no-deps -d /tmp/avd-wheel || true
+          python - <<'PY'
+          import glob, zipfile
+          wheels = glob.glob('/tmp/avd-wheel/yt_dlp-*.whl')
+          if not wheels:
+              print('pinned wheel unavailable; engine-dependent tests will be skipped')
+          else:
+              with zipfile.ZipFile(wheels[0]) as z:
+                  z.extractall('vendor')
+              print('extracted', wheels[0])
+          PY
+
+      - name: Unit tests
+        if: ${{ hashFiles('vendor/yt_dlp/version.py') != '' }}
+        run: python -m unittest discover -s tests -v
+
+      - name: Supply-chain inventory
+        run: python sca_report.py --check
+
+      - name: HTML deliverables are well-formed and offline
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import re
+          VOID = {'meta','br','hr','img','input','link','path','rect','line','circle','use','source','polygon'}
+          class Checker(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.stack=[]; self.bad=[]
+              def handle_starttag(self, tag, attrs):
+                  if tag not in VOID: self.stack.append(tag)
+              def handle_endtag(self, tag):
+                  if tag in VOID: return
+                  if self.stack and self.stack[-1] == tag: self.stack.pop()
+                  else: self.bad.append(tag)
+          for path in sorted(Path('.').glob('*.html')):
+              text = path.read_text(encoding='utf-8')
+              c = Checker(); c.feed(text)
+              assert not c.stack and not c.bad, f'{path}: unclosed={c.stack[:3]} mismatched={c.bad[:3]}'
+              assert not re.search(r'https?://(?:cdn|unpkg|jsdelivr|fonts)', text), f'{path}: external CDN'
+              print('  OK', path.name, len(text), 'chars')
+          PY

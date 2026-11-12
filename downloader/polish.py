@@ -369,6 +369,10 @@ def _normalize_base_url(raw: str) -> str:
 
 def list_models(base_url: str, api_key: str = "", timeout: float = 12.0) -> list[str]:
     """拉取模型清单（``GET {base_url}/models``）。用于设置页一键选模型。"""
+    from fusion import hardening  # noqa: WPS433 — 延迟导入避免循环
+    ok, why = hardening.check_llm_base_url(base_url)
+    if not ok:
+        raise LLMError(f"模型地址被拒绝：{why}")
     root = _normalize_base_url(base_url)
     if not root:
         raise LLMError("请先填写模型服务地址")
@@ -420,6 +424,10 @@ def chat_stream(
     走 SSE（``stream: true``）。若服务端无视 ``stream`` 直接回整包 JSON，
     这里也能识别并降级处理 —— 有些自建网关就是这么干的。
     """
+    from fusion import hardening  # noqa: WPS433 — 延迟导入避免循环
+    ok, why = hardening.check_llm_base_url(base_url)
+    if not ok:
+        raise LLMError(f"模型地址被拒绝：{why}")
     root = _normalize_base_url(base_url)
     if not root:
         raise LLMError("请先填写模型服务地址")

@@ -1,1 +1,5 @@
 2.0.0-flagship
+revision: r3 (2026-11-12, P0-P2 closure)
+engine: yt-dlp 2026.10.26 (vendored unmodified)
+asr_model: faster-whisper-large-v3-turbo (bundled, MIT)
+

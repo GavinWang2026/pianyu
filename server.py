@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import subprocess
@@ -29,6 +30,7 @@ from typing import Any, Optional
 from downloader import asr, config, friendly_error, manager, polish, probe
 from fusion import api as fusion_api
 from fusion import guards
+from fusion import hardening
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -158,6 +160,7 @@ def _fetch_thumbnail(url: str) -> tuple[str, bytes]:
 
     with _thumb_lock:
         _thumb_cache[url] = (now, content_type, body)
+        hardening.trim_thumb_cache(_thumb_cache, now)
     return content_type, body
 
 
@@ -234,6 +237,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         if length <= 0:
             return {}
+        if length > hardening.MAX_JSON_BYTES:
+            raise hardening.PayloadTooLarge(
+                f"请求体过大，上限 {hardening.MAX_JSON_BYTES // 1024} KB")
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))
@@ -267,7 +273,36 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static(route)
 
     def do_HEAD(self) -> None:  # noqa: N802
-        self.do_GET()
+        """HEAD 只回响应头，绝不写响应体（P2-1）。
+
+        原版直接复用 do_GET：/api/progress 这类 SSE 路由会把事件流写进
+        HEAD 响应，既违反 HTTP 语义，也会把连接挂住。
+        """
+        route = urllib.parse.urlparse(self.path).path
+        if route.startswith("/api/"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        relative = "index.html" if route in ("/", "") else route.lstrip("/")
+        if relative.startswith("static/"):
+            relative = relative[len("static/"):]
+        candidate = (STATIC_DIR / relative).resolve()
+        safe = guards.within(STATIC_DIR, candidate)
+        if safe is None or not safe.is_file():
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            mimetypes.guess_type(str(safe))[0] or "application/octet-stream",
+        )
+        self.send_header("Content-Length", str(safe.stat().st_size))
+        self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -286,7 +321,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_asr_upload(parsed.query)
             return
 
-        self._handle_api_post(route)
+        try:
+            self._handle_api_post(route)
+        except hardening.PayloadTooLarge as exc:
+            self._fail(str(exc), HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
 
     # ------------------------------------------------------------------ 静态资源
 
@@ -479,6 +517,10 @@ class Handler(BaseHTTPRequestHandler):
             # 前端拿到的是脱敏后的 "***"；保存时忽略哨兵值，避免把真 key 覆盖掉
             clean = {k: v for k, v in payload.items()
                      if not (isinstance(v, str) and v == "***")}
+            ok, why = hardening.validate_config_patch(clean)
+            if not ok:
+                self._fail(why, HTTPStatus.FORBIDDEN)
+                return
             updated = config.update(clean)
             self._ok(config=guards.redact_config(updated))
             return
@@ -712,6 +754,14 @@ class Handler(BaseHTTPRequestHandler):
         if written == 0:
             self._fail("上传内容为空")
             return
+        if written != length:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._fail(f"上传不完整（已收 {written}/{length} 字节），请重试",
+                       HTTPStatus.BAD_REQUEST)
+            return
 
         params = urllib.parse.parse_qs(query or "")
         language = (params.get("language") or ["zh"])[0]
@@ -789,7 +839,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8760) -> ThreadingHTTPSer
     last_error: Optional[Exception] = None
     for candidate in range(port, port + 40):
         try:
-            server = ThreadingHTTPServer((host, candidate), Handler)
+            server = hardening.LimitedThreadingHTTPServer((host, candidate), Handler)
             server.daemon_threads = True
             return server
         except OSError as exc:

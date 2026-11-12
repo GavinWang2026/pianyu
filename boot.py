@@ -35,8 +35,31 @@ BANNER = r"""
 """
 
 
+MAIN_MIN_PYTHON = (3, 11)   # yt-dlp 2026.10.26 起最低 3.11
+ASR_PYTHON = (3, 13)        # 随包 cp313 原生扩展需要独立 3.13 运行时
+
+
+def _version_gate() -> str:
+    """版本分层检查：主服务 3.11+，ASR 独立运行时 3.13。
+
+    两者刻意分开：主服务是纯 Python + 标准库，不必强求 3.13；
+    ASR 依赖编译过的 cp313 扩展，由 .venv-asr 单独提供。
+    """
+    if sys.version_info[:2] < MAIN_MIN_PYTHON:
+        return (f"当前 Python {sys.version.split()[0]} 过低：主服务需要 "
+                f"{MAIN_MIN_PYTHON[0]}.{MAIN_MIN_PYTHON[1]}+"
+                "（上游 yt-dlp 2026.10.26 已放弃 3.10）")
+    return ""
+
+
 def main() -> int:
     os.chdir(APP_DIR)
+
+    gate = _version_gate()
+    if gate:
+        print(f"\n  ✕ 无法启动：{gate}")
+        print("    安装 Python 3.11+ 后重新运行；本地语音识别另需 3.13 运行时。\n")
+        return 1
 
     # 装配随包交付的离线语音权重：必须在任何 ASR 任务启动之前完成。
     # 只设环境变量，不改上游 worker 一行代码。
@@ -66,6 +89,8 @@ def main() -> int:
 
     print(BANNER)
     print(f"  ▸ 服务地址      {url}")
+    print(f"  ▸ 运行环境      Python {sys.version.split()[0]} · {sys.platform}"
+          f"  (主服务 ≥3.11 / ASR 独立运行时 3.13)")
     print(f"  ▸ 下载引擎      yt-dlp {report['engine_version']}  (vendor/ 内嵌，已锁定)")
     print(f"  ▸ 插件扩展点    {'已装配' if report['plugins'].get('loaded') else '未装配'}"
           f"  {report['plugins'].get('root', '')}")
@@ -76,7 +101,10 @@ def main() -> int:
           f"  ({'断网可用' if model['offline_capable'] else '需联网下载'})"
           f"  engine={model['engine']}")
     if not report["asr"].get("available"):
-        print("                  修复：python3 doctor.py --check  然后 --repair")
+        fix = ("运行 setup-windows-runtime.bat（安装 Win 版依赖）"
+               if os.name == "nt" else
+               "python3 doctor.py --check  然后 --repair")
+        print(f"                  修复：{fix}")
     print("  ▸ 停止服务      按 Ctrl + C\n")
 
     if os.environ.get("AVD_NO_BROWSER") != "1":

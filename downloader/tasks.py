@@ -188,19 +188,22 @@ class TaskManager:
 
     def _on_progress(self, task: Task, event: dict) -> None:
         stage = event.get("stage")
+        with self._lock:
+            fallback = (task.percent, task.stream_index,
+                        task.stream_count, task.filename)
         fields: dict = {}
 
         if stage == "downloading":
             fields.update({
                 "stage": "downloading",
-                "percent": event.get("percent", task.percent),
-                "stream_index": event.get("stream_index", task.stream_index),
-                "stream_count": event.get("stream_count", task.stream_count),
+                "percent": event.get("percent", fallback[0]),
+                "stream_index": event.get("stream_index", fallback[1]),
+                "stream_count": event.get("stream_count", fallback[2]),
                 "downloaded_bytes": event.get("downloaded_bytes", 0),
                 "total_bytes": event.get("total_bytes", 0),
                 "speed": event.get("speed"),
                 "eta": event.get("eta"),
-                "filename": event.get("filename") or task.filename,
+                "filename": event.get("filename") or fallback[3],
                 "message": "",
             })
         elif stage == "postprocess":

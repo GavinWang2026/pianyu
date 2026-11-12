@@ -8,13 +8,14 @@
 
 ## 1. 自主研发部分（Copyright © 2026 Hyht-Team）
 
-| 类别 | 内容 | 行数 |
+| 类别 | 内容 | 行数（r3 重算） |
 |---|---|---|
-| A 原版自研未改动 | UI（app.js / style.css）、`downloader/` 8 模块、`tools/` 2 模块、`app.py` | 7,435 |
-| B 本轮新增 | `fusion/` 融合层、统一入口、环境自检、离线验收、`static/flagship.js`、测试、`yt_dlp_plugins/` | 2,656 |
-| D 原版 + 精确补丁 | `server.py`（10 处补丁）、`static/index.html`（+1 行 script） | 1,324 |
+| A 原版自研未改动 | UI（app.js / style.css）、`downloader/` 5 个未改模块、`tools/` 2 模块、`app.py` | 5,500 |
+| B 本轮新增 | `fusion/` 融合层（含加固 / 引擎参数 / 诊断）、统一入口、环境自检、离线验收、SBOM、36 项测试、`static/flagship.js`、`yt_dlp_plugins/` | 3,643 |
+| D 原版 + 精确补丁 | `server.py`（19 处补丁）、`static/index.html`（+1 行）、`asr.py` / `polish.py` / `tasks.py`（r3 安全补丁） | 3,339 |
 
-**合计 11,415 行自研源码。** UI、交互、业务编排、合规话术、文字稿结构化均为自主研发；
+**合计 12,482 行自研源码。** r3 把 `asr.py / polish.py / tasks.py` 从 A 类改归 D 类，
+理由与逐文件明细见 `作者信息`——口径按真实改动状态更正，不做有利化调整。 UI、交互、业务编排、合规话术、文字稿结构化均为自主研发；
 使用第三方库不影响本产品作为「自主研发产品」对外表述，但不得宣称
 「全栈自研 / 100% 自研 / 自研语音识别模型 / 无第三方依赖 / 底层解析引擎自研」。
 
@@ -50,11 +51,18 @@
 
 | 组件 | 来源 | 许可 | 位置 |
 |---|---|---|---|
-| faster-whisper-tiny (CT2) | `Systran/faster-whisper-tiny` | **MIT**（模型卡 `license: mit`，2026-11-12 核验） | `models/faster-whisper-tiny/`，84 MB |
-| Whisper tiny 基座 | `openai/whisper-tiny` | **Apache-2.0**（模型卡，同期核验） | 转换版所基于的上游模型 |
+| faster-whisper-large-v3-turbo (CT2) | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **MIT**（模型卡 `license: mit`，2026-11-12 核验） | `models/faster-whisper-large-v3-turbo/`，1.5 GB，**默认档** |
+| faster-whisper-tiny (CT2) | `Systran/faster-whisper-tiny` | **MIT**（模型卡 `license: mit`） | `models/faster-whisper-tiny/`，84 MB，轻量备用档 |
+| Whisper large-v3-turbo 官方权重 | `openai/whisper-large-v3-turbo` | **MIT**（模型卡） | turbo 转换版对应的官方发布 |
+| Whisper large-v3 基座 | `openai/whisper-large-v3` | **Apache-2.0**（模型卡，同期核验） | 官方 turbo 的 `base_model` |
+| Whisper tiny 基座 | `openai/whisper-tiny` | **Apache-2.0**（模型卡） | tiny 转换版所基于的上游模型 |
 
-> 两处许可都如实列出。转换版权重是否同时受基座许可约束，属实务判断，
-> **签大单前请许可复核**，本包不作法律结论。
+**证据链结论（2026-11-12 逐仓核验）**：两份 CT2 转换版权重自身均标 MIT，
+但其上游基座分别标 Apache-2.0（tiny / large-v3）。转换版权重是否同时继承基座
+义务，属法律判断；本包**按最保守口径同时履行 MIT 与 Apache-2.0 义务**：
+`LICENSES/MIT.txt`、`LICENSES/Apache-2.0.txt` 全文随包分发，
+`LICENSES/README.md` 保留来源、版本与变更说明。
+**签大单前仍请许可书面复核**，本包不作法律结论。
 
 ### 2.4 系统依赖（未捆绑）
 
@@ -87,13 +95,20 @@
 **本轮已补齐（相对上一版）**
 
 1. ✅ 模型权重许可核验（MIT / Apache-2.0 均已核到模型卡，不再写「待核验」）；
-2. ✅ 模型权重随包预置，断网转写成立（此前首次运行会因 `HfHubHTTPError` 整块失败）；
-3. ✅ ASR 运行时实体化并列出 8 个包各自许可；
-4. ✅ 自研边界：`LICENSE`、`作者信息`、B 类文件版权头、git 基线。
+2. ✅ 新增 large-v3-turbo 档位：**1.5 GB MIT 权重随包**，默认走大模型，
+   中文实测精度明显高于 tiny（「期见版」→「旗舰版」）；
+3. ✅ MIT / Apache-2.0 许可证全文随包 + 来源与变更说明（`LICENSES/`）；
+4. ✅ 模型权重随包预置，断网转写成立（此前首次运行会因 `HfHubHTTPError` 整块失败）；
+5. ✅ ASR 运行时实体化并列出 8 个包各自许可；
+6. ✅ 自研边界：`LICENSE`、`作者信息`、B 类文件版权头、git 基线；
+7. ✅ 平台 Cookie 通道与安全边界（`cookies/README.md`，cookie 文件强制限定包内）；
+8. ✅ 供应链物料清单（SBOM）与 CI 静态检查配置，见 `SCA-供应链清单.md`、`.github/workflows/ci.yml`。
 
 **仍待补齐（本包未代做）**
 
 1. 若捆绑 ffmpeg 静态二进制，按其编译开关确认 LGPL/GPL 义务；
-2. 转换版权重是否同时受基座 Apache-2.0 约束，请许可复核；
-3. `vendor/yt_dlp/` 内嵌代码的完整 SCA 扫描报告；
-4. 软件著作权登记、「自主知识产权」认定所需的主管部门材料。
+2. 转换版权重是否同时受基座 Apache-2.0 约束，**请许可书面签字**
+   （证据链已备齐、义务已按最保守口径履行，但法律结论不由本包代作）；
+3. 在线 CVE 数据库比对（本包只出离线 SBOM，未联网跑 SCA 扫描器）；
+4. 软件著作权登记、「自主知识产权」认定所需的主管部门材料；
+5. Windows 运行时真机验收（脚本已备，本机 macOS 无法实测）。

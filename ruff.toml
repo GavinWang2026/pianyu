@@ -1,0 +1,12 @@
+# AVD Flagship —— 只把「会造成运行错误」的规则设为 CI 硬门禁。
+# 原版 AVD 与内嵌上游代码不纳入风格治理；自研新增代码逐步收紧。
+line-length = 110
+target-version = "py311"
+exclude = [
+    "vendor", "runtime", "models", "outputs", "downloads",
+    ".venv", ".venv-asr", ".uploads", "site", "reports", "launch",
+]
+
+[lint]
+select = ["E9", "F63", "F7", "F82"]  # 语法 / 未定义名 / 异常写法等致命问题
+ignore = ["E501", "E741"]

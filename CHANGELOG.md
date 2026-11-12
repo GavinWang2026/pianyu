@@ -93,3 +93,48 @@ ASR 双引擎就绪、ffmpeg 在位；5 条攻击请求均被拒。发布包 18 
   description / duration` 全为 `None`，该增值依赖平台 extractor。
 - 「双引擎可用」更正为「离线包只提供 faster 引擎」；MLX 随裁剪移除。
 - tiny 模型精度不足生产档位，已将「断网可用」与「生产精度」拆成两件事如实说明。
+
+---
+
+## v2.0.0-r3 · P0–P2 闭环修订（2026-11-12）
+
+触发：项目负责人 给出抖音真实短链并要求修复两份报告中的 P0–P2。
+详见 `AVD-Flagship-v2_缺陷闭环复评v3.html` 与 `内部闭环记录（未入库）`。
+
+### 平台链路（实测 + 产品化恢复路径）
+- 实测抖音短链 302 → Web detail API 403 → 定位 `tiktok.py:1493-1506` 要求 `s_v_web_id`；
+  Safari Cookie 被 macOS TCC 拒绝；cookiefile 通道实证贯通。
+- 新增 `fusion/engine_opts.py`：probe / download 统一继承 Cookie、代理、重试、
+  extractor 裁剪参数，并支持**限定包内**的 `cookies.txt`。
+- 新增 `fusion/diagnostics.py` 与 `POST /api/platform/diagnose`：8 类平台错误中文诊断
+  （含 `COOKIE_PERMISSION` / `COOKIE_STALE`）；流水线失败时任务带 `diagnosis` 字段。
+- `_probe_once` 增加短链 / 开放重定向落地地址二次校验。
+- 新增 `cookies/README.md`、`.gitignore` 排除 `cookies/*.txt`。
+
+### 工程缺陷闭环（16 处精确补丁，每处断言命中 1 次）
+- `fusion/hardening.py`：P0-5 配置写入校验、P1-1 缓存三重淘汰、P1-2 48 并发上限、
+  P1-4 1 MiB JSON 上限、P1-5 LLM 出口校验。
+- `server.py`：HEAD 语义、413、上传完整性、并发服务器替换、配置校验接线。
+- `downloader/asr.py`：取消时异步 reap 子进程 + `wait(timeout)` 兜底（P1-3）。
+- `downloader/polish.py`：`list_models` / `chat_stream` 出口校验（P1-5）。
+- `downloader/tasks.py`：进度回退值锁内快照（P2-4）。
+
+### 精度、许可与供应链
+- 新增 `models/faster-whisper-large-v3-turbo/`（1.5 GB，MIT），默认档由 tiny 升级；
+  同一段自有语音实测「期见版」→「旗舰版」，离线转写 6.4s。
+- 新增 `LICENSES/`（MIT / Apache-2.0 全文 + 来源与变更说明）；`NOTICE.md` 补齐
+  5 个模型卡的许可证据链，按最保守口径履行双重义务，法律结论仍留待确认。
+- 新增 `sca_report.py` + `SCA-供应链清单.md`（离线 SBOM）、
+  `.github/workflows/ci.yml`、`ruff.toml`、`mypy.ini`、`set_git_identity.sh`。
+- 新增 `PLATFORM_SUPPORT.md` 与 `setup-windows-runtime.bat`；`doctor.py` / `boot.py`
+  增加跨平台分支与版本分层闸门（主服务 ≥3.11 / ASR 3.13）。
+
+### 验证与口径更正
+- **36 / 36** 单测（新增 `test_hardening.py` 19 项）、离线全链 **6.9s**、
+  HTTP 端到端 413 / 403 / HEAD / 诊断全绿。
+- 新增单测当场抓出加固代码自身的大小写 bug（`/System/Library` 漏放）并修复。
+- `作者信息` 更正：`asr.py / polish.py / tasks.py` 从 A 类改归 D 类；
+  自研源码 11,415 → **12,482 行**（A 5,500 / B 3,643 / D 3,339）。
+- 发布包 267 MB → **1.8 GB**（turbo 权重 1.5 GB），3,240 文件。
+- 仍未闭环：抖音完整出稿需新鲜 Cookie、Windows 真机验收、在线 CVE 扫描、
+  许可确认、真实 git 主体、批量下放决策。

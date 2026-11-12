@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
-from . import boot_check, guards, knowledge
+from . import boot_check, diagnostics, engine_opts, guards, knowledge
 
 APP_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = APP_DIR / "outputs" / "pipeline"
@@ -64,6 +64,7 @@ class PipelineTask:
     keywords: list[str] = field(default_factory=list)
     files: dict[str, str] = field(default_factory=dict)
     degraded: list[str] = field(default_factory=list)
+    diagnosis: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     media_path: str = ""
     created_at: float = field(default_factory=time.time)
@@ -85,6 +86,7 @@ class PipelineTask:
             "keywords": list(self.keywords),
             "files": dict(self.files),
             "degraded": list(self.degraded),
+            "diagnosis": dict(self.diagnosis),
             "error": self.error,
             "media_path": self.media_path,
             "created_at": self.created_at,
@@ -97,17 +99,9 @@ def _probe_once(url: str) -> dict[str, Any]:
     boot_check.activate()
     import yt_dlp  # noqa: WPS433 — 必须在 activate() 之后导入
 
-    opts: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "socket_timeout": 30,
-        "nocheckcertificate": False,
-    }
-    allowed = guards.allowed_extractors()
-    if allowed:
-        opts["allowed_extractors"] = allowed  # 官方裁剪开关，零源码改动
+    # 统一参数契约：cookie / 代理 / 重试 / extractor 裁剪全部继承配置。
+    # 实测教训：原先这里只拼 6 个固定参数，抖音短链因缺 Cookie 直接 403。
+    opts = engine_opts.base_opts(url)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False) or {}
@@ -118,7 +112,65 @@ def _probe_once(url: str) -> dict[str, Any]:
         info = entries[0]
     if not info:
         raise RuntimeError("解析失败：未取得任何元信息")
+    # 短链 / 开放重定向二次校验：入口白名单只管用户给的 URL，
+    # 这里再确认引擎最终落地地址没有跳进内网或元数据服务。
+    landing = str(info.get("webpage_url") or "")
+    if landing.startswith(("http://", "https://")):
+        ok, why = guards.check_media_url(landing, enforce_allowlist=False)
+        if not ok:
+            raise RuntimeError(f"解析结果落地地址不安全，已拒绝：{why}")
     return info
+
+
+def diagnose_url(url: str) -> dict[str, Any]:
+    """同步诊断一条链接：只解析一次、不下载，返回可操作结论。
+
+    供 ``POST /api/platform/diagnose`` 使用，让运维在正式跑流水线前
+    就能知道「这个站点要 Cookie / 要 PO Token / 还是被白名单挡了」。
+    """
+    clean = (url or "").strip()
+    ok, reason = guards.check_media_url(clean)
+    if not ok:
+        return {
+            "ok": False, "ready": False, "url": clean,
+            "platform": diagnostics.platform_hint(clean),
+            "auth": engine_opts.cookie_status(),
+            "diagnosis": {
+                "code": "BLOCKED_BY_POLICY", "title": "链接未通过合规 / 安全校验",
+                "detail": reason,
+                "actions": ["确认站点在 AVD_ALLOWED_HOSTS 白名单内",
+                            "确认目标不是内网 / 本机 / 云元数据地址"],
+                "raw": reason, "actionable": True,
+            },
+        }
+    hint = diagnostics.platform_hint(clean)
+    auth = engine_opts.cookie_status()
+    try:
+        info = _probe_once(clean)
+    except Exception as exc:  # 平台错误一律转成结构化诊断，不把英文原文甩给用户
+        return {
+            "ok": True, "ready": False, "url": clean,
+            "platform": hint, "auth": auth,
+            "diagnosis": diagnostics.diagnose(exc),
+        }
+    return {
+        "ok": True, "ready": True, "url": clean,
+        "platform": hint, "auth": auth,
+        "diagnosis": {
+            "code": "OK", "title": "解析成功，可以一键出稿",
+            "detail": "已取得完整 info；把这条链接交给 /api/pipeline/start 即可。",
+            "actions": [], "raw": "", "actionable": False,
+        },
+        "info": {
+            "id": info.get("id"), "title": info.get("title"),
+            "extractor": info.get("extractor") or info.get("extractor_key"),
+            "duration": info.get("duration"),
+            "chapters": len(info.get("chapters") or []),
+            "subtitle_tracks": len(info.get("subtitles") or {}),
+            "auto_captions": len(info.get("automatic_captions") or {}),
+            "webpage_url": info.get("webpage_url"),
+        },
+    }
 
 
 def _download_once(info: dict[str, Any], work_dir: Path) -> str:
@@ -126,15 +178,14 @@ def _download_once(info: dict[str, Any], work_dir: Path) -> str:
     boot_check.activate()
     import yt_dlp  # noqa: WPS433
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "noplaylist": True,
+    # 与解析同一套参数契约：平台视频流同样需要 Cookie / 代理 / extractor 配置。
+    opts = engine_opts.base_opts(str(info.get("webpage_url") or ""))
+    opts.pop("skip_download", None)  # 下载阶段必须允许真正取流
+    opts.update({
         "format": "bestaudio/best",
         "outtmpl": {"default": str(work_dir / "media.%(ext)s")},
         "overwrites": False,
-    }
+    })
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.process_info(dict(info))
     files = sorted((p for p in work_dir.glob("media.*") if p.is_file()),
@@ -489,7 +540,9 @@ class PipelineManager:
                       finished_at=time.time())
 
         except Exception as exc:
-            self._set(task, stage="error", error=str(exc), message=f"失败：{exc}",
+            item = diagnostics.diagnose(exc)
+            self._set(task, stage="error", error=str(exc),
+                      message=diagnostics.friendly(exc), diagnosis=item,
                       percent=100.0, finished_at=time.time())
 
 

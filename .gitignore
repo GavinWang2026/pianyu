@@ -7,6 +7,11 @@
 /.venv/
 /.venv-asr-test/
 
+# 凭据：cookie 文件绝不入库（cookies/README.md 说明文档要保留）
+/cookies/*.txt
+/cookies/*.json
+/cookies/*.db
+
 # 本机配置、运行产物、缓存
 /config.json
 /outputs/
