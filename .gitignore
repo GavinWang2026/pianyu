@@ -1,0 +1,20 @@
+# 第三方资产：由发布脚本 / NOTICE.md 管理，不计入自研源码仓库。
+# 目的：让 git 历史成为「哪些代码是 Hyht-Team 自己写的」的干净证据。
+/vendor/
+/runtime/
+/models/
+/.venv-asr/
+/.venv/
+/.venv-asr-test/
+
+# 本机配置、运行产物、缓存
+/config.json
+/outputs/
+/downloads/
+/uploads/
+/.uploads/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
+/tmp/

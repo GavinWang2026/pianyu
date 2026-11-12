@@ -1,0 +1,13 @@
+{
+  "download_dir": "",
+  "proxy_mode": "never",
+  "proxy_url": "",
+  "cookies_from_browser": "",
+  "filename_template": "%(title).120s [%(id)s].%(ext)s",
+  "prefer_subtitle": true,
+  "asr_engine": "auto",
+  "llm_base_url": "",
+  "llm_api_key": "",
+  "llm_model": "",
+  "llm_disable_thinking": true
+}

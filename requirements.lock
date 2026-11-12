@@ -1,0 +1,15 @@
+# AVD Flagship v2.0.0 — 依赖锁定
+#
+# 下载引擎不再走 pip 安装：yt-dlp 2026.10.26 的源码包已原样内嵌在
+# vendor/yt_dlp/（Unlicense，未修改一行）。启动时由 fusion/boot_check.py
+# 注入 sys.path 并强制校验版本，因此**断网可用、版本不漂移**。
+#
+# 下面这一行仅作为溯源记录，安装时不读取：
+yt-dlp[default]==2026.10.26   # vendored unmodified, RELEASE_GIT_HEAD=c91f8de0bfb3577894abad716eaaa01659e6bd14
+
+# 主服务（server.py / downloader/ / fusion/）仅依赖 Python 标准库 >= 3.10。
+# 可选能力：
+#   ffmpeg          — 音视频合并/转码，系统 PATH 或 runtime/ffmpeg/bin/
+#   mlx-whisper     — Apple Silicon 本地语音识别，独立 .venv-asr 环境
+#   faster-whisper  — 其他平台本地语音识别，独立 .venv-asr 环境
+#   OpenAI 兼容接口 — 文案整理，可指向客户内网私有大模型，非必需

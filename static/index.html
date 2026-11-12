@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark light" />
+<title>素材工作台 · 本地处理</title>
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%236d5efc'/%3E%3Cpath d='M16 8v11m0 0l-4.5-4.5M16 19l4.5-4.5M9 23h14' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<!-- 背景光晕 -->
+<div class="aurora" aria-hidden="true">
+  <span class="aurora-blob a"></span>
+  <span class="aurora-blob b"></span>
+  <span class="aurora-blob c"></span>
+  <span class="grid-overlay"></span>
+</div>
+
+<div class="shell">
+
+  <!-- ───────────────────────────── 顶栏 ───────────────────────────── -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M4 20h16" />
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>素材工作台</h1>
+        <p>本地提取 · 数据不出机</p>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">
+        <svg class="ico ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+        </svg>
+        <svg class="ico ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4.2" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+        </svg>
+      </button>
+      <button class="icon-btn" id="btnHistory" title="下载记录" aria-label="下载记录">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4.5h4.5" /><path d="M12 7.5V12l3 2" />
+        </svg>
+        <span class="dot-badge" id="historyBadge" hidden></span>
+      </button>
+      <button class="icon-btn" id="btnSettings" title="设置" aria-label="设置">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-3-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4.6a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.3 1.3Z" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+
+    <!-- ─────────────────────── 链接输入区 ─────────────────────── -->
+    <section class="hero" id="hero">
+      <div class="hero-copy">
+        <h2 class="hero-title">把素材收进自己的库里</h2>
+        <p class="hero-sub">自动识别来源、列出全部清晰度、音视频自动合并</p>
+      </div>
+
+      <div class="url-field" id="urlField">
+        <span class="url-field-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+            <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+          </svg>
+        </span>
+        <input
+          id="urlInput"
+          type="text"
+          inputmode="url"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="粘贴你有权处理的素材链接，例如 https://example.com/sample.mp4"
+        />
+        <button class="ghost-btn" id="btnPaste" title="从剪贴板粘贴">粘贴</button>
+        <button class="primary-btn" id="btnParse">
+          <span class="btn-label">解析</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="platform-chips">
+        <span class="chip">B站</span>
+        <span class="chip">抖音</span>
+        <span class="chip">快手</span>
+        <span class="chip">小红书</span>
+        <span class="chip">微博</span>
+        <span class="chip">YouTube</span>
+        <span class="chip chip-more">支持主流平台</span>
+      </div>
+    </section>
+
+    <!-- ─────────────────────── 解析结果卡 ─────────────────────── -->
+    <section class="preview card" id="preview" hidden>
+      <div class="preview-media">
+        <img id="thumbImg" alt="视频封面" />
+        <div class="media-fallback" id="mediaFallback">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2.5" y="5" width="19" height="14" rx="3" /><path d="M10 9.5l5 2.5-5 2.5z" />
+          </svg>
+        </div>
+        <span class="platform-badge" id="platformBadge"></span>
+      </div>
+
+      <div class="preview-body">
+        <h3 class="preview-title" id="previewTitle">—</h3>
+        <div class="preview-meta" id="previewMeta"></div>
+
+        <div class="section-head">
+          <span>选择清晰度</span>
+          <em id="qualityHint"></em>
+        </div>
+        <div class="quality-grid" id="qualityGrid"></div>
+
+        <div class="preview-actions">
+          <button class="download-btn" id="btnDownload">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 4v11" /><path d="M7.5 11 12 15.5 16.5 11" /><path d="M5 19.5h14" />
+            </svg>
+            <span>保存到本地</span>
+          </button>
+          <button class="ghost-btn lg accent" id="btnExtract" title="从视频语音中提取文字稿">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 5.5h16" /><path d="M4 10.5h16" /><path d="M4 15.5h9" />
+              <path d="M18 14.5v5" /><path d="M15.5 17h5" />
+            </svg>
+            <span>提取文案</span>
+          </button>
+          <button class="ghost-btn lg" id="btnReset">换一个</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────────────────── 进度面板 ─────────────────────── -->
+    <section class="progress card" id="progressPanel" hidden>
+      <div class="progress-head">
+        <div class="progress-thumbwrap">
+          <img id="pThumb" alt="" />
+        </div>
+        <div class="progress-headtext">
+          <h3 id="pTitle">—</h3>
+          <p id="pSubtitle">准备中…</p>
+        </div>
+        <button class="ghost-btn danger" id="btnCancel">取消</button>
+      </div>
+
+      <div class="stage-track" id="stageTrack">
+        <div class="stage-node" data-stage="parse"><i></i><span>解析链接</span></div>
+        <div class="stage-line"></div>
+        <div class="stage-node" data-stage="download"><i></i><span>下载数据</span></div>
+        <div class="stage-line"></div>
+        <div class="stage-node" data-stage="merge"><i></i><span>合并处理</span></div>
+        <div class="stage-line"></div>
+        <div class="stage-node" data-stage="done"><i></i><span>完成</span></div>
+      </div>
+
+      <div class="bar-wrap">
+        <div class="bar-head">
+          <span class="bar-percent" id="barPercent">0%</span>
+          <span class="bar-note" id="barNote"></span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat"><label>速度</label><b id="statSpeed">—</b></div>
+        <div class="stat"><label>已下载</label><b id="statSize">—</b></div>
+        <div class="stat"><label>剩余时间</label><b id="statEta">—</b></div>
+        <div class="stat"><label>文件</label><b id="statName" class="ellipsis">—</b></div>
+      </div>
+
+      <details class="log-box">
+        <summary>运行日志</summary>
+        <pre id="logPre"></pre>
+      </details>
+
+      <div class="done-panel" id="donePanel" hidden>
+        <div class="done-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 12.5 9.5 17.5 19.5 7" />
+          </svg>
+        </div>
+        <div class="done-text">
+          <b>下载完成</b>
+          <span id="doneName" class="ellipsis">—</span>
+        </div>
+        <div class="done-actions">
+          <button class="primary-btn sm" id="btnOpenFile">打开文件</button>
+          <button class="ghost-btn sm" id="btnOpenFolder">打开文件夹</button>
+          <button class="ghost-btn sm accent" id="btnExtractDone">提取文案</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────────────────── 文案提取面板 ─────────────────────── -->
+    <section class="transcript card" id="transcriptPanel" hidden>
+      <header class="ts-head">
+        <div class="ts-headmain">
+          <span class="ts-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 5.5h16" /><path d="M4 10.5h16" /><path d="M4 15.5h9" />
+              <path d="M18 14.5v5" /><path d="M15.5 17h5" />
+            </svg>
+          </span>
+          <div class="ts-headtext">
+            <div class="ts-titlerow">
+              <h3 id="tsTitle">文案提取</h3>
+              <span class="ts-source" id="tsSource" hidden></span>
+            </div>
+            <p id="tsMeta">准备中…</p>
+          </div>
+        </div>
+        <div class="ts-headtools">
+          <label class="ts-lang" title="文案来源">
+            <select id="tsMode">
+              <option value="auto">自动 · 有字幕用字幕</option>
+              <option value="subtitle">仅用平台字幕</option>
+              <option value="asr">仅用语音识别</option>
+            </select>
+          </label>
+          <label class="ts-lang" title="识别语言">
+            <select id="tsLang">
+              <option value="zh">中文</option>
+              <option value="en">英文</option>
+              <option value="auto">自动识别</option>
+            </select>
+          </label>
+          <button class="icon-btn" id="btnTsClose" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 运行态 -->
+      <div class="ts-running" id="tsRunning">
+        <div class="bar"><div class="bar-fill" id="tsBarFill"></div></div>
+        <div class="ts-status">
+          <span class="ts-pct" id="tsPercent">0%</span>
+          <span class="ts-msg" id="tsMessage">准备中…</span>
+          <button class="ghost-btn sm danger" id="btnTsCancel">取消</button>
+        </div>
+        <div class="ts-live" id="tsLive"></div>
+      </div>
+
+      <!-- 结果态 -->
+      <div class="ts-done" id="tsDone" hidden>
+        <div class="ts-toolbar">
+          <div class="seg-switch" id="tsViewSwitch">
+            <button type="button" data-view="plain" class="active">纯文本</button>
+            <button type="button" data-view="timed">时间戳</button>
+          </div>
+          <div class="ts-tools">
+            <span class="ts-count" id="tsCount"></span>
+            <button class="ghost-btn sm" id="btnTsCopy">复制全文</button>
+            <div class="export-wrap">
+              <button class="ghost-btn sm" id="btnTsExport">导出</button>
+              <div class="export-menu" id="tsExportMenu" hidden>
+                <button type="button" data-fmt="txt">纯文本 <em>.txt</em></button>
+                <button type="button" data-fmt="srt">字幕文件 <em>.srt</em></button>
+                <button type="button" data-fmt="md">Markdown <em>.md</em></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 文案整理：本地规则零依赖可用，接上大模型后能力更强 -->
+        <div class="polish-panel" id="polishPanel">
+          <div class="polish-head">
+            <span class="polish-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 20l1.6-4.5L16.2 5.9a2 2 0 0 1 2.9 2.9L9.5 18.4 5 20Z" />
+                <path d="M14.5 7.5 16.5 9.5" />
+              </svg>
+              整理文案
+            </span>
+            <div class="polish-ops" id="polishOps"></div>
+            <div class="polish-actions">
+              <button class="ghost-btn sm" id="btnPolishRevert" hidden>看原文</button>
+              <button class="primary-btn sm" id="btnPolishRun">开始整理</button>
+            </div>
+          </div>
+          <div class="polish-note" id="polishNote"></div>
+          <div class="polish-live" id="polishLive" hidden></div>
+        </div>
+
+        <!-- 整理结果：摘要与关键词 -->
+        <div class="polish-summary" id="polishSummary" hidden>
+          <div class="ps-head">
+            <span class="ps-badge">摘要</span>
+            <span class="ps-engine" id="polishEngine"></span>
+          </div>
+          <p class="ps-text" id="polishSummaryText"></p>
+          <div class="keyword-row" id="polishKeywords"></div>
+        </div>
+
+        <div class="ts-body" id="tsBody"></div>
+      </div>
+    </section>
+
+    <!-- ─────────────────────── 空态提示 ─────────────────────── -->
+    <section class="empty-hint" id="emptyHint">
+      <div class="empty-grid">
+        <div class="empty-item">
+          <span class="empty-num">01</span>
+          <b>准备素材</b>
+          <p>复制你有权处理的素材链接</p>
+        </div>
+        <div class="empty-item">
+          <span class="empty-num">02</span>
+          <b>粘贴解析</b>
+          <p>粘贴进输入框，自动识别清晰度</p>
+        </div>
+        <div class="empty-item">
+          <span class="empty-num">03</span>
+          <b>保存到本地</b>
+          <p>选好画质，点击保存即可完成</p>
+        </div>
+        <div class="empty-item">
+          <span class="empty-num">04</span>
+          <b>提取文案</b>
+          <p>解析后提取语音文字，也可直接拖入本地视频</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <span>本地运行 · 数据不出本机</span>
+    <span class="dot">·</span>
+    <span id="footDir">下载目录加载中…</span>
+    <button class="link-btn" id="btnOpenDir">打开目录</button>
+  </footer>
+</div>
+
+<!-- ───────────────────────────── 抽屉：下载记录 ───────────────────────────── -->
+<aside class="drawer" id="historyDrawer" hidden>
+  <div class="drawer-mask" data-close></div>
+  <div class="drawer-panel">
+    <header class="drawer-head">
+      <h3>下载记录</h3>
+      <div class="drawer-head-actions">
+        <button class="ghost-btn sm" id="btnClearHistory">清空已完成</button>
+        <button class="icon-btn" data-close aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+    </header>
+    <div class="drawer-body" id="historyList"></div>
+  </div>
+</aside>
+
+<!-- ───────────────────────────── 抽屉：设置 ───────────────────────────── -->
+<aside class="drawer" id="settingsDrawer" hidden>
+  <div class="drawer-mask" data-close></div>
+  <div class="drawer-panel">
+    <header class="drawer-head">
+      <h3>设置</h3>
+      <button class="icon-btn" data-close aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </header>
+    <div class="drawer-body">
+      <div class="field">
+        <label for="setDir">下载目录</label>
+        <input id="setDir" type="text" spellcheck="false" />
+        <div class="field-actions">
+          <button class="ghost-btn sm" id="btnRevealDir">打开目录</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="setProxyMode">代理模式</label>
+        <select id="setProxyMode">
+          <option value="never">不使用代理（直连）</option>
+          <option value="auto">智能：仅境外站点走代理</option>
+          <option value="always">所有站点都走代理</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="setProxyUrl">代理地址</label>
+        <input id="setProxyUrl" type="text" spellcheck="false" placeholder="http://127.0.0.1:7890" />
+        <div class="field-actions">
+          <button class="ghost-btn sm" id="btnUseEnvProxy">读取系统代理</button>
+        </div>
+        <p class="field-tip">下载 YouTube 等境外站点时填写；国内站点建议保持直连。</p>
+      </div>
+
+      <div class="field">
+        <label for="setCookies">浏览器 Cookie（可选）</label>
+        <select id="setCookies">
+          <option value="">不使用</option>
+          <option value="chrome">Chrome</option>
+          <option value="edge">Edge</option>
+          <option value="safari">Safari</option>
+          <option value="firefox">Firefox</option>
+          <option value="brave">Brave</option>
+        </select>
+        <p class="field-tip">用于访问你已获授权的自有内容（如自己账号下的课程、会议回放）。</p>
+      </div>
+
+      <div class="field-group-title">文案提取</div>
+
+      <label class="switch-field" for="setPreferSubtitle">
+        <span class="switch-text">
+          <b>优先使用平台字幕</b>
+          <em>视频自带字幕时直接取用，秒出且零误差；没有字幕才跑语音识别</em>
+        </span>
+        <input type="checkbox" id="setPreferSubtitle" class="switch" />
+      </label>
+
+      <div class="field">
+        <label for="setAsrEngine">语音识别引擎</label>
+        <select id="setAsrEngine">
+          <option value="auto">自动选择</option>
+          <option value="mlx">MLX（Apple 芯片，最快）</option>
+          <option value="faster">Faster-Whisper（通用）</option>
+        </select>
+        <p class="field-tip" id="asrEngineTip">按当前机器自动挑最合适的引擎。</p>
+      </div>
+
+      <div class="field-group-title">文案整理（可选）</div>
+
+      <div class="field">
+        <label for="setLlmUrl">模型服务地址</label>
+        <input id="setLlmUrl" type="text" spellcheck="false" placeholder="http://127.0.0.1:11434/v1" />
+        <div class="field-actions">
+          <button class="ghost-btn sm" id="btnUseLocalLlm">检测本机服务</button>
+          <button class="ghost-btn sm" id="btnLoadModels">拉取模型列表</button>
+        </div>
+        <p class="field-tip">任何 OpenAI 兼容接口都行：本机 Ollama、DeepSeek、通义、OpenAI…</p>
+      </div>
+
+      <div class="field">
+        <label for="setLlmModel">模型名称</label>
+        <input id="setLlmModel" type="text" spellcheck="false" list="llmModelList" placeholder="qwen3-14b-40k:latest" />
+        <datalist id="llmModelList"></datalist>
+      </div>
+
+      <div class="field">
+        <label for="setLlmKey">API 密钥</label>
+        <input id="setLlmKey" type="password" spellcheck="false" placeholder="本机模型可留空" />
+      </div>
+
+      <label class="switch-field" for="setLlmNoThink">
+        <span class="switch-text">
+          <b>关闭思考模式</b>
+          <em>Qwen3 一类模型会先输出大段思维链，关掉更快也更稳</em>
+        </span>
+        <input type="checkbox" id="setLlmNoThink" class="switch" />
+      </label>
+
+      <button class="primary-btn block" id="btnSaveSettings">保存设置</button>
+      <p class="field-tip center" id="setSavedHint" hidden>已保存 ✓</p>
+    </div>
+  </div>
+</aside>
+
+<!-- 拖拽上传遮罩 -->
+<div class="drop-overlay" id="dropOverlay" hidden>
+  <div class="drop-card">
+    <span class="drop-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4" /><path d="M7.5 8.5 12 4l4.5 4.5" />
+        <path d="M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3" />
+      </svg>
+    </span>
+    <b>松手即开始提取文案</b>
+    <span class="drop-sub">支持视频 / 音频文件 · mp4 · mov · mkv · mp3 · m4a · wav</span>
+  </div>
+</div>
+
+<!-- 首次启动：使用边界确认 -->
+<div class="terms-overlay" id="termsOverlay" hidden>
+  <div class="terms-card" role="dialog" aria-modal="true" aria-labelledby="termsTitle">
+    <span class="terms-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3 4.5 6.5v5.8c0 4.3 3 7.6 7.5 8.7 4.5-1.1 7.5-4.4 7.5-8.7V6.5Z" />
+        <path d="M9 12.2l2.2 2.2L15.2 10" />
+      </svg>
+    </span>
+    <h3 id="termsTitle">使用前请确认</h3>
+    <p class="terms-sub">工具全程在你本机运行，同时也需要你守住使用边界。</p>
+
+    <ul class="terms-list">
+      <li>
+        <b>只处理你有权处理的内容</b>
+        <span>自有素材、已获授权的作品，或平台明确允许保存的内容。</span>
+      </li>
+      <li>
+        <b>不用于绕过付费墙</b>
+        <span>不以规避平台技术措施、批量搬运他人作品为目的。</span>
+      </li>
+      <li>
+        <b>数据不出本机</b>
+        <span>解析、转写、整理都在本地完成，不上传到任何服务器。</span>
+      </li>
+    </ul>
+
+    <label class="terms-agree" for="termsAgree">
+      <input type="checkbox" id="termsAgree" />
+      <span>我已阅读并同意上述使用边界</span>
+    </label>
+
+    <button class="primary-btn block" id="btnTermsOk" disabled>开始使用</button>
+    <p class="terms-foot">确认后本机会记住，不再重复弹出。</p>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="/static/app.js"></script>
+<script src="/static/flagship.js"></script>
+</body>
+</html>
