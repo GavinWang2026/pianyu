@@ -1,4 +1,4 @@
 2.0.0-flagship
-revision: r7 (2026-11-17, 第十一轮 D21–D35 第二批：状态对账 reconcile / 上传类型配额磁盘预检 / handle_post 与 _run 阶段化拆分 / DOCX-PDF 统一渲染与 golden-file / 静默 except 可观测化 / 前端关键路径冒烟)
+revision: r8 (2026-11-17, 第三批升级：长素材 map-reduce 分层摘要与覆盖度出处 / 章节质量评估与术语归一 / 素材库问答评测集 / 访谈课程播客会议模板)
 engine: yt-dlp 2026.10.26 (vendored unmodified)
 asr_model: faster-whisper-large-v3-turbo (bundled, MIT)

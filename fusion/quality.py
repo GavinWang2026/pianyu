@@ -386,3 +386,124 @@ def render_dual_column_md(
             continue
         lines.append(f"| {raw} | {cur} |")
     return "\n".join(lines) + "\n"
+
+
+def chapter_quality(
+    chapters: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+    *,
+    min_seconds: float = 20.0,
+) -> dict[str, Any]:
+    """章节质量评估：空章、过短、越界、重名与正文覆盖空洞。
+
+    ``score`` 100 为满分；每个问题扣分并附可执行的修复建议。
+    这是「自动分段是否可信」的可观测指标，不阻塞出稿。
+    """
+    issues: list[dict[str, str]] = []
+    total_end = 0.0
+    for s in segments:
+        try:
+            total_end = max(total_end, float(s.get("end") or s.get("start") or 0))
+        except (TypeError, ValueError):
+            continue
+
+    seen: dict[str, int] = {}
+    prev_start = -1.0
+    for i, ch in enumerate(chapters):
+        title = str(ch.get("title") or "").strip()
+        try:
+            start = float(ch.get("start") or 0)
+            end = float(ch.get("end") or start)
+        except (TypeError, ValueError):
+            issues.append({"code": "chapter.bad_time", "detail": f"第 {i + 1} 章时间不可解析"})
+            continue
+        if not title:
+            issues.append({"code": "chapter.empty_title", "detail": f"第 {i + 1} 章没有标题"})
+        if end - start < min_seconds:
+            issues.append({
+                "code": "chapter.too_short",
+                "detail": f"「{title or i + 1}」仅 {end - start:.0f}s，建议并入相邻章",
+            })
+        if start < prev_start:
+            issues.append({"code": "chapter.unordered", "detail": f"「{title}」时间倒序"})
+        prev_start = start
+        if total_end and end > total_end + 1:
+            issues.append({"code": "chapter.out_of_range", "detail": f"「{title}」超出素材时长"})
+        if title:
+            seen[title] = seen.get(title, 0) + 1
+            if seen[title] == 2:
+                issues.append({"code": "chapter.duplicate_title", "detail": f"标题重复：{title}"})
+
+    if chapters:
+        covered = sum(
+            max(0.0, float(c.get("end") or 0) - float(c.get("start") or 0))
+            for c in chapters
+        )
+        if total_end and covered / total_end < 0.85:
+            issues.append({
+                "code": "chapter.gap",
+                "detail": f"章节只覆盖 {covered / total_end:.0%} 的时长，存在空洞",
+            })
+
+    score = max(0, 100 - 15 * len(issues))
+    return {"ok": not issues, "score": score, "issues": issues}
+
+
+def _term_key(term: str) -> str:
+    """同一术语的归一键：ASCII 忽略空格/点/连字符/大小写，中文保持原样。"""
+    t = term.strip()
+    if all(ord(c) < 128 for c in t):
+        return re.sub(r"[\s.\-_]+", "", t).lower()
+    return t
+
+
+def normalize_terms(
+    segments: list[dict[str, Any]],
+    *,
+    min_count: int = 2,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """实体/术语消歧：把同一术语的变体收敛到最高频写法。
+
+    例：``A.I.`` / ``AI`` / ``Ai`` → ``AI``；只处理出现 ≥ ``min_count`` 次的
+    变体，避免把偶然出现的拼写错误当成规范名。返回 (新段列表, 映射)。
+    """
+    blob = "".join(str(s.get("text") or "") for s in segments)
+    counts: dict[str, int] = {}
+    for ent in extract_entities(blob):
+        n = blob.count(ent)
+        if n >= min_count and len(_term_key(ent)) >= 2:
+            counts[ent] = n
+
+    groups: dict[str, list[tuple[str, int]]] = {}
+    for term, n in counts.items():
+        groups.setdefault(_term_key(term), []).append((term, n))
+
+    mapping: dict[str, str] = {}
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        items.sort(key=lambda kv: (-kv[1], kv[0]))
+        canonical = items[0][0]
+        for term, _ in items[1:]:
+            if term != canonical:
+                mapping[term] = canonical
+
+    if not mapping:
+        return segments, {}
+
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        text = str(seg.get("text") or "")
+        for variant, canonical in mapping.items():
+            if variant in text:
+                # ASCII 变体要求边界，避免把 "AI" 替换进 "AID"
+                if all(ord(c) < 128 for c in variant):
+                    text = re.sub(
+                        rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])",
+                        canonical, text,
+                    )
+                else:
+                    text = text.replace(variant, canonical)
+        out.append({**seg, "text": text})
+    return out, mapping
+

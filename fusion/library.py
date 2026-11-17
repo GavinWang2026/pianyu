@@ -715,3 +715,50 @@ def export_booklet(
 def tokenizer_name() -> str:
     _connect()
     return _TOKENIZER
+
+
+def evaluate(cases: list[dict[str, Any]], *, limit: int = 5) -> dict[str, Any]:
+    """素材库问答评测：Recall@K、引用命中率、MRR。
+
+    ``cases`` 每项形如
+    ``{"query": "索引结构", "task_id": "abc123", "contains": "倒排"}``。
+    只看检索与引用，不调用 LLM，结果可复现；用于回归「改了索引后答不准」。
+    """
+    lim = max(1, min(20, int(limit)))
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        query = str(case.get("query") or "").strip()
+        expect = str(case.get("task_id") or "").strip()
+        needle = str(case.get("contains") or "").strip()
+        hits = search(query, limit=lim) if query else []
+        ids = [str(h.get("id") or "") for h in hits]
+        rank = ids.index(expect) + 1 if expect and expect in ids else 0
+        cited = False
+        if expect:
+            for h in hits:
+                if str(h.get("id") or "") != expect:
+                    continue
+                blob = f"{h.get('title') or ''}{h.get('snippet') or ''}"
+                if not needle or needle in blob:
+                    cited = True
+                    break
+        rows.append({
+            "query": query,
+            "task_id": expect,
+            "hit": bool(rank),
+            "rank": rank,
+            "citation": cited,
+        })
+
+    n = len(rows)
+    return {
+        "count": n,
+        "recall": round(sum(1 for r in rows if r["hit"]) / n, 3) if n else 0.0,
+        "citation_accuracy": round(sum(1 for r in rows if r["citation"]) / n, 3) if n else 0.0,
+        "mrr": round(
+            sum(1.0 / r["rank"] for r in rows if r["rank"]) / n, 3
+        ) if n else 0.0,
+        "k": lim,
+        "rows": rows,
+    }
+

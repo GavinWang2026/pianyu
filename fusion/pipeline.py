@@ -130,6 +130,7 @@ class PipelineTask:
             "title": self.meta.get("title", ""),
             "source_kind": self.source_kind,
             "chapter_count": len(self.meta.get("chapters") or []),
+            "chapter_quality": dict(self.meta.get("chapter_quality") or {}),
             # R2：完整章节列表随快照输出。第十轮发现 export-clips-by-chapters
             # 从 snap["meta"] 取章节，而 to_dict 从来没给过 meta —— 该接口
             # 100% 回「任务没有章节」。章节通常 <50 条，随快照带的代价可接受。
@@ -153,6 +154,7 @@ class PipelineTask:
             "not_before": self.not_before,
             "chapters_auto": bool(self.meta.get("chapters_auto")),
             "summary_kind": self.meta.get("summary_kind") or "",
+            "summary_coverage": dict(self.meta.get("summary_coverage") or {}),
             "speakers": bool(self.meta.get("speakers")),
             "speaker_source": self.meta.get("speaker_source") or "",
             "speaker_confidence": self.meta.get("speaker_confidence"),
@@ -1341,6 +1343,7 @@ class PipelineManager:
         want_download: bool = True,
         want_polish: bool = True,
         expand_playlist: bool | None = None,
+        template: str = "",
     ) -> dict[str, Any]:
         clean = (url or "").strip()
         ok, reason = guards.check_media_url(clean)
@@ -1357,6 +1360,7 @@ class PipelineManager:
                     language=language,
                     want_download=want_download,
                     want_polish=want_polish,
+                    template=template,
                 )
                 first = (batch.get("tasks") or [None])[0]
                 if first:
@@ -1370,6 +1374,7 @@ class PipelineManager:
         return self._enqueue(
             clean, language=language,
             want_download=want_download, want_polish=want_polish,
+            template=template,
         )
 
     def start_batch(
@@ -1381,6 +1386,7 @@ class PipelineManager:
         want_polish: bool = True,
         delay_seconds: Any = None,
         run_at: Any = None,
+        template: str = "",
     ) -> dict[str, Any]:
         """多 URL 排队：单条失败不影响其余；并发由信号量控制。
 
@@ -1413,7 +1419,7 @@ class PipelineManager:
             self._enqueue(
                 u, language=language,
                 want_download=want_download, want_polish=want_polish,
-                not_before=not_before,
+                not_before=not_before, template=template,
             )
             for u in cleaned
         ]
@@ -1434,6 +1440,7 @@ class PipelineManager:
         want_download: bool = True,
         want_polish: bool = True,
         not_before: float | None = None,
+        template: str = "",
     ) -> dict[str, Any]:
         self._purge_stale()  # 已节流：≥300s 才真跑，不再是每单一次全树 stat
         msg = "排队中…"
@@ -1445,6 +1452,8 @@ class PipelineManager:
             want_download=want_download, want_polish=want_polish,
             stage="queued", message=msg, not_before=not_before,
         )
+        if template:
+            task.meta["template"] = str(template)
         with self._lock:
             if len(self._tasks) >= MAX_TASKS:
                 raise RuntimeError(f"任务数已达上限（{MAX_TASKS}），请清理后再试")
@@ -1983,10 +1992,37 @@ class PipelineManager:
             except Exception as exc:  # noqa: BLE001
                 self._degrade(task, "polish.body", f"正文分段跳过：{exc}")
 
+            # 实体/术语消歧：把 A.I. / Ai 之类的变体收敛到最高频写法
+            try:
+                from . import quality as _quality_terms
+                task.segments, term_map = _quality_terms.normalize_terms(task.segments)
+                if term_map:
+                    meta["term_normalized"] = term_map
+                    self._degrade(
+                        task, "term.normalized",
+                        f"术语消歧 {len(term_map)} 处："
+                        + "、".join(f"{k}→{v}" for k, v in list(term_map.items())[:5]),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._degrade(task, "term.normalize", f"术语消歧跳过：{exc}")
+
             if task.want_polish:
-                summary, keywords, src = enrich_summary(task.segments, use_llm=True)
-                task.summary, task.keywords = summary, keywords
-                meta["summary_kind"] = src
+                chars = sum(len(str(s.get("text") or "")) for s in task.segments)
+                if chars >= 8000:
+                    # D26：长素材一次性塞进 2400 字预算会丢后半程，
+                    # 改走 map-reduce，并把覆盖度/出处写进快照。
+                    from . import longform
+                    result = longform.map_reduce_summary(
+                        task.segments, use_llm=True)
+                    task.summary = str(result.get("summary") or "")
+                    task.keywords = list(result.get("keywords") or [])
+                    meta["summary_kind"] = str(result.get("source") or "rule_mapreduce")
+                    meta["summary_coverage"] = dict(result.get("coverage") or {})
+                    meta["summary_provenance"] = list(result.get("provenance") or [])
+                else:
+                    summary, keywords, src = enrich_summary(task.segments, use_llm=True)
+                    task.summary, task.keywords = summary, keywords
+                    meta["summary_kind"] = src
             self._set(task, segments=task.segments, meta=meta)
             self._tick(task)
 
@@ -2044,6 +2080,21 @@ class PipelineManager:
                     f"平台未提供章节，已按停顿自动分成 {len(auto)} 段（标注「自动分段」）",
                 )
                 self._set(task, meta=meta)
+
+        # 章节质量评估：空章/过短/倒序/越界/重名/覆盖空洞，出稿前给可观测分数
+        if meta.get("chapters"):
+            try:
+                from . import quality as _quality_ch
+                cq = _quality_ch.chapter_quality(meta["chapters"], task.segments)
+                meta["chapter_quality"] = cq
+                if not cq.get("ok"):
+                    first = (cq.get("issues") or [{}])[0].get("detail") or ""
+                    self._degrade(
+                        task, "chapter.quality",
+                        f"章节质量 {cq.get('score')} 分：{first}",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._degrade(task, "chapter.quality", f"章节质量评估跳过：{exc}")
 
         # 要点 / 术语 / 时间戳索引（规则兜底；有 LLM 时一次调用增强）
         try:
@@ -2285,6 +2336,8 @@ class PipelineManager:
             }
             meta = knowledge.meta_from_info(info, "")
             meta["local_file"] = True
+            if task.meta.get("template"):
+                meta["template"] = task.meta["template"]
             task.media_path = str(path)
             self._set(task, info=info, meta=meta)
             try:
@@ -2301,6 +2354,8 @@ class PipelineManager:
             info = self._probe(task.url)
             self._tick(task)
             meta = knowledge.meta_from_info(info, task.url)
+            if task.meta.get("template"):
+                meta["template"] = task.meta["template"]
             self._set(task, info=info, meta=meta)
 
         (work_dir / "info.json").write_text(

@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.0.0-r8 · 第三批升级 · 让「更值钱」成立（2026-11-17）
+
+### 长素材理解
+- 新增 `fusion/longform.py`：超长转写（≥8,000 字）先按 ~1,800 字分块 map，
+  再 reduce 成总摘要；返回 `coverage`（块数 / 覆盖块数 / 覆盖率 / 字数）与
+  `provenance`（每块起止秒）。LLM 不可用或单块失败时逐块回退规则要点，
+  不虚报覆盖率；短素材仍走原 `enrich_summary`，行为不变。
+- 任务快照新增 `summary_coverage`，`meta` 记录 `summary_kind` /
+  `summary_coverage` / `summary_provenance`。
+
+### 质量与术语
+- `quality.chapter_quality()`：检查章节时间倒序 / 越界 / 过短 / 空标题 /
+  重名 / 覆盖空洞，输出 `{ok, score, issues}`；不达标记 `chapter.quality` 降级。
+- `quality.normalize_terms()`：归并 ASCII 术语的大小写与空格/点/连字符变体
+  （如 `Ai` → `AI`），要求词边界，避免误改 `AID`；写 `term_normalized` 降级项。
+
+### 内容形态
+- `knowledge.render_markdown()` 支持 `template`：`interview` / `course` /
+  `podcast` / `meeting`，分别产出访谈提纲、课程大纲与思考题、本期亮点与
+  资源时间轴、结论与行动项；无模板时输出逐字节不变。
+- `PipelineManager.start/start_batch` 与 `/api/pipeline/start|batch` 透传 `template`。
+
+### 素材库评测
+- `library.evaluate(cases)`：对检索结果计算 Recall@K、引用正确率与 MRR，
+  新增 `tests/fixtures/library_eval.json` 三条正样本做回归。
+
+### 测试与核算
+- 新增 `tests/test_r3_upgrade.py`（13 项）与 `tests/test_frontend_smoke.py`；
+  全量 **316 项** 单测通过。
+- 口径更新为 **31,921 行 / 81 文件**（A 582 + B 21,103 + D 10,236）。
+
 ## v2.0.0-r7 · 第十一轮缺陷修复 · 第二批（2026-11-17）
 
 「让可维护成立」：对账、预检、拆分、渲染统一、可观测、前端冒烟。

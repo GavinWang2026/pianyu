@@ -1,0 +1,33 @@
+{
+  "materials": [
+    {
+      "task_id": "eval0001",
+      "title": "知识管理入门",
+      "body": "本地优先的知识管理先把素材入库，再建倒排索引。倒排索引决定检索速度与命中率。",
+      "tags": ["索引", "知识管理"],
+      "collection": "评测",
+      "meta": {"duration": 180, "timestamp_index": [{"at": 42, "text": "倒排索引决定检索速度"}]}
+    },
+    {
+      "task_id": "eval0002",
+      "title": "远程协作会议",
+      "body": "会议决定下周上线灰度版本，产品负责跟进埋点，研发负责回归测试与发布清单。",
+      "tags": ["会议", "行动项"],
+      "collection": "评测",
+      "meta": {"duration": 600, "timestamp_index": [{"at": 96, "text": "产品负责跟进埋点"}]}
+    },
+    {
+      "task_id": "eval0003",
+      "title": "播客：长内容生产",
+      "body": "两小时访谈要分层摘要，先按段分块，再逐块提炼，最后合并并标注每段出处。",
+      "tags": ["播客", "摘要"],
+      "collection": "评测",
+      "meta": {"duration": 7200, "timestamp_index": [{"at": 3600, "text": "分层摘要并标注出处"}]}
+    }
+  ],
+  "cases": [
+    {"query": "倒排索引", "task_id": "eval0001", "contains": "倒排索引"},
+    {"query": "埋点", "task_id": "eval0002", "contains": "负责"},
+    {"query": "分层摘要", "task_id": "eval0003", "contains": "分层摘要"}
+  ]
+}

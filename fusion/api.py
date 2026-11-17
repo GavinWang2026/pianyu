@@ -298,6 +298,7 @@ def _post_pipeline(handler: Any, route: str,
                 want_download=want_download,
                 want_polish=payload.get("want_polish", True) is not False,
                 expand_playlist=expand_flag,
+                template=str(payload.get("template") or ""),
             )
         except ValueError as exc:
             handler._fail(str(exc), HTTPStatus.FORBIDDEN)
@@ -328,6 +329,7 @@ def _post_pipeline(handler: Any, route: str,
                 want_polish=payload.get("want_polish", True) is not False,
                 delay_seconds=payload.get("delay_seconds"),
                 run_at=payload.get("run_at"),
+                template=str(payload.get("template") or ""),
             )
         except ValueError as exc:
             handler._fail(str(exc), HTTPStatus.FORBIDDEN)

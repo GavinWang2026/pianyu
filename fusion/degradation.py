@@ -132,6 +132,9 @@ _SPECS: dict[str, Spec] = {
         "note", False, "无需处理（避免独白被误判成多说话人）"),
     # —— 知识稿 ——
     "chapter.auto": Spec("note", False, "可在校对页手工修改章节标题"),
+    "chapter.quality": Spec("warn", False, "校对页调整章节边界/标题；不影响已有正文与导出"),
+    "term.normalized": Spec("note", False, "如需保留原写法，可在校对页改回"),
+    "term.normalize": Spec("note", False, "无需处理"),
     "insights.skip": Spec("warn", True, "重试；持续失败请查看日志"),
     "insights.error": Spec("warn", True, "重试"),
     "sponsor.removed": Spec(

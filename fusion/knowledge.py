@@ -362,6 +362,96 @@ def frontmatter(meta: dict[str, Any], *, source_kind: str = "") -> str:
     return "---\n" + "\n".join(rows) + "\n---"
 
 
+_TEMPLATES = ("interview", "course", "podcast", "meeting")
+_ACTION_HINTS = ("决定", "结论", "需要", "负责", "跟进", "下一步", "待办", "行动项", "安排")
+
+
+def _template_block(meta: dict[str, Any],
+                    segments: list[dict[str, Any]]) -> list[str]:
+    """按内容模板追加结构化小节：访谈 / 课程 / 播客 / 会议。
+
+    只做「同一批素材的不同组织方式」，不改变正文与事实；未指定模板
+    （或缺省）时返回空列表，历史产物逐字节不变。
+    """
+    tpl = str(meta.get("template") or "").strip().lower()
+    if tpl not in _TEMPLATES:
+        return []
+    lines: list[str] = []
+    points = [str(p) for p in (meta.get("key_points") or []) if str(p).strip()]
+    chapters = [c for c in (meta.get("chapters") or []) if isinstance(c, dict)]
+    glossary = list(meta.get("glossary") or [])
+
+    if tpl == "interview":
+        lines += ["## 访谈提纲", ""]
+        turns = [s for s in segments if str(s.get("speaker") or "").strip()][:40]
+        if turns:
+            for s in turns:
+                at = fmt_clock(float(s.get("start") or 0))
+                lines.append(
+                    f"- `{at}` **{s.get('speaker')}**：{str(s.get('text') or '').strip()}")
+        else:
+            lines.append("- 未启用说话人标注；可在设置中开启 `asr_diarize` 后重跑")
+        lines += ["", "---", ""]
+
+    elif tpl == "course":
+        lines += ["## 课程大纲", ""]
+        for c in chapters:
+            lines.append(
+                f"- `{fmt_clock(float(c.get('start') or 0))}` "
+                f"{c.get('title') or '未命名'}")
+        if not chapters:
+            lines.append("- 平台未提供章节，可先在校对页分段")
+        if points:
+            lines += ["", "## 知识点", ""] + [f"- {p}" for p in points[:12]]
+        questions = [f"- 如何用自己的话解释「{p.rstrip('。；;')}」？" for p in points[:5]]
+        if questions:
+            lines += ["", "## 思考题", ""] + questions
+        lines += ["", "---", ""]
+
+    elif tpl == "podcast":
+        lines += ["## 本期亮点", ""]
+        lines += [f"- {p}" for p in points[:8]] or ["- 暂无要点"]
+        if glossary:
+            lines += ["", "## 提及资源", ""]
+            for g in glossary[:12]:
+                if isinstance(g, dict):
+                    lines.append(f"- **{g.get('term')}**：{g.get('note') or ''}")
+                else:
+                    lines.append(f"- {g}")
+        if chapters:
+            lines += ["", "## 章节时间轴", ""]
+            for c in chapters:
+                lines.append(
+                    f"- `{fmt_clock(float(c.get('start') or 0))}` {c.get('title') or ''}")
+        lines += ["", "---", ""]
+
+    elif tpl == "meeting":
+        actions = [
+            s for s in segments
+            if any(h in str(s.get("text") or "") for h in _ACTION_HINTS)
+        ][:15]
+        lines += ["## 结论与行动项", ""]
+        if actions:
+            for s in actions:
+                who = str(s.get("speaker") or "").strip()
+                at = fmt_clock(float(s.get("start") or 0))
+                prefix = f"**{who}** " if who else ""
+                lines.append(f"- [ ] `{at}` {prefix}{str(s.get('text') or '').strip()}")
+        else:
+            lines.append("- 未识别到明确结论/行动项，请在校对页补充")
+        stats = meta.get("speaker_stats") or {}
+        if stats:
+            lines += ["", "## 发言分布", ""]
+            for name, info in stats.items():
+                if isinstance(info, dict):
+                    lines.append(
+                        f"- **{name}**：{info.get('count', 0)} 段 / "
+                        f"{info.get('seconds', 0)} 秒")
+        lines += ["", "---", ""]
+
+    return lines
+
+
 def render_markdown(
     meta: dict[str, Any],
     segments: list[dict[str, Any]],
@@ -436,6 +526,8 @@ def render_markdown(
             if isinstance(item, dict):
                 lines.append(f"- `{fmt_clock(float(item.get('at') or 0))}` {item.get('text') or ''}")
         lines += ["", "---", ""]
+
+    lines += _template_block(meta, segments)
 
     webpage = str(meta.get("webpage_url") or meta.get("url") or "").strip()
     paras = list(meta.get("paragraphs") or [])
