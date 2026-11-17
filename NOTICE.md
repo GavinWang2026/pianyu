@@ -11,10 +11,10 @@
 | 类别 | 内容 | 行数（r6 实测 2026-11-17） |
 |---|---|---|
 | A 原版自研未改动 | `downloader/`（`__init__` / `subtitles`）、`requirements.txt`、`setup-asr.bat` | 582 |
-| B Hyht-Team 新增 | `fusion/` 28 模块、`tests/` 11 文件、`static/flagship.js` + `flagship.css` + `i18n.js`、`yt_dlp_plugins/` 3 个、`boot.py` / `doctor.py` / `verify_*` / SBOM 与 CVE 脚本 / `cookies/cookie_doctor.py` 共 13 个 | 19,808 |
+| B Hyht-Team 新增 | `fusion/` 28 模块、`tests/` 11 文件、`static/flagship.js` + `flagship.css` + `i18n.js`、`yt_dlp_plugins/` 3 个、`boot.py` / `doctor.py` / `verify_*` / SBOM 与 CVE 脚本 / `cookies/cookie_doctor.py` 共 13 个 | 19,823 |
 | D 原版 + 精确补丁 | `server.py`、`static/index.html`、`static/app.js`、`static/style.css`、`downloader/`（`asr` / `polish` / `tasks` / `config` / `engine` / `runtime_paths`）、`tools/`（`asr_worker` / `asr_setup`）、`start.command` | 10,181 |
 
-**合计 30,571 行自研源码（4 + 58 + 16 = 78 个文件）。** 判定规则：与首个提交
+**合计 30,586 行自研源码（4 + 58 + 16 = 78 个文件）。** 判定规则：与首个提交
 `957b362` 逐文件 `git diff` 为空 → A 类；有改动 → D 类；不在该提交内 → B 类。
 r5 相对 r3 的变化：`static/app.js`（+292/−5）、`style.css`（+31/−2）、
 `downloader/config.py`（+107/−3）、`engine.py`（+138/−7）、`tools/asr_worker.py`（+491/−50）

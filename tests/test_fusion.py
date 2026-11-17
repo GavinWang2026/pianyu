@@ -745,6 +745,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any("不含音轨" in d for d in snap["degraded"]))
         self.assertFalse(any("环境未就绪" in d for d in snap["degraded"]))
 
+    @unittest.skipUnless((ROOT / "models").is_dir(), "源码仓不含权重；发布包才校验")
     def test_offline_model_is_bundled(self) -> None:
         models = asr_offline.available_models()
         self.assertTrue(models, "发布包必须预置至少一份离线权重")

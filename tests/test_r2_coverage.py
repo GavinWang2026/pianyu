@@ -35,7 +35,11 @@ os.environ.setdefault(
     str(Path(tempfile.mkdtemp(prefix="avd-test-lib-")) / "library.sqlite3"),
 )
 
-from fusion import degradation, pipeline  # noqa: E402
+from fusion import boot_check, degradation, pipeline  # noqa: E402
+
+# 单文件运行也要能加载内嵌引擎（downloader/__init__ 会 import yt_dlp）；
+# 此前依赖 test_fusion 先激活，属于顺序耦合。
+boot_check.activate()
 
 
 # ---------------------------------------------------------------- 替身工具
@@ -459,10 +463,16 @@ class ExportTests(unittest.TestCase):
                 pipeline.push_export("e1", "notion")
 
     def _vault(self) -> Path:
-        """临时 vault 必须位于用户主目录下（resolve_obsidian_dir 的硬约束）。"""
-        root = APP_DIR / "outputs"
+        """临时 vault 必须位于「用户主目录」下；用假 home 让干净克隆也能跑。"""
+        self._home = Path(tempfile.mkdtemp(prefix="avd-home-"))
+        root = self._home / "vaults"
         root.mkdir(parents=True, exist_ok=True)
         return Path(tempfile.mkdtemp(prefix="avd-vault-", dir=root))
+
+    def _home_patch(self):
+        """把 Path.home 指向临时目录，避免依赖仓库是否位于真实 home 下。"""
+        return mock.patch.object(
+            Path, "home", classmethod(lambda cls: self._home))
 
     @staticmethod
     def _cleanup(path: Path) -> None:
@@ -472,12 +482,13 @@ class ExportTests(unittest.TestCase):
     def test_resolve_obsidian_dir(self):
         target = self._vault()
         try:
-            self.assertIsNone(pipeline.resolve_obsidian_dir("   "))
-            self.assertIsNone(pipeline.resolve_obsidian_dir("/etc"))
-            got = pipeline.resolve_obsidian_dir(str(target))
-            self.assertIsNotNone(got)
+            with self._home_patch():
+                self.assertIsNone(pipeline.resolve_obsidian_dir("   "))
+                self.assertIsNone(pipeline.resolve_obsidian_dir("/etc"))
+                got = pipeline.resolve_obsidian_dir(str(target))
+                self.assertIsNotNone(got)
         finally:
-            self._cleanup(target)
+            self._cleanup(self._home)
 
     def test_write_obsidian(self):
         root = Path(tempfile.mkdtemp(prefix="avd-obs-"))
@@ -489,19 +500,20 @@ class ExportTests(unittest.TestCase):
         mgr._tasks["e2"] = task
         _write(root / "e2" / "直写样本.md", "# 正文")
         try:
-            with mock.patch.object(pipeline, "manager", lambda: mgr):
-                out = pipeline.write_obsidian("e2", vault=str(vault))
-            self.assertTrue(Path(out["path"]).is_file())
-            self.assertGreater(out["bytes"], 0)
-            # 同名再写一次 → 追加短 id，不覆盖手稿
-            with mock.patch.object(pipeline, "manager", lambda: mgr):
-                again = pipeline.write_obsidian("e2", vault=str(vault))
-            self.assertIn("e2", Path(again["path"]).name)
-            with mock.patch.object(pipeline, "manager", lambda: mgr):
-                with self.assertRaises(ValueError):
-                    pipeline.write_obsidian("e2", vault="/etc")
+            with self._home_patch():
+                with mock.patch.object(pipeline, "manager", lambda: mgr):
+                    out = pipeline.write_obsidian("e2", vault=str(vault))
+                self.assertTrue(Path(out["path"]).is_file())
+                self.assertGreater(out["bytes"], 0)
+                # 同名再写一次 → 追加短 id，不覆盖手稿
+                with mock.patch.object(pipeline, "manager", lambda: mgr):
+                    again = pipeline.write_obsidian("e2", vault=str(vault))
+                self.assertIn("e2", Path(again["path"]).name)
+                with mock.patch.object(pipeline, "manager", lambda: mgr):
+                    with self.assertRaises(ValueError):
+                        pipeline.write_obsidian("e2", vault="/etc")
         finally:
-            self._cleanup(vault)
+            self._cleanup(self._home)
 
 
 # ---------------------------------------------------------------- 字幕轨

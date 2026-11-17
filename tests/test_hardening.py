@@ -60,8 +60,10 @@ class ConfigPatchTests(unittest.TestCase):
                 self.assertFalse(ok, target)
 
     def test_accepts_legitimate_patch(self) -> None:
+        # 不写盘；仅校验合法绝对路径，避免 /tmp 被「系统目录」规则拒绝
+        download_dir = str(Path.home() / "Downloads")
         ok, why = hardening.validate_config_patch({
-            "download_dir": str(APP_DIR / "downloads"),
+            "download_dir": download_dir,
             "filename_template": "%(title).120s [%(id)s].%(ext)s",
             "llm_base_url": "http://127.0.0.1:11434",
         })

@@ -25,7 +25,7 @@
 - **D32**：清理 40 个 4 字节 junk 文件；打包从黑名单改为**白名单**
   （报告、验证脚本、测试、状态目录不再可能误入包）；单测清理改用
   `shutil.rmtree`，不再在 `outputs/` 留空壳。
-- **D33**：`作者信息` / `NOTICE.md` 口径更新为 **30,571 行 / 78 文件**、
+- **D33**：`作者信息` / `NOTICE.md` 口径更新为 **30,586 行 / 78 文件**、
   **285 项用例**；`verify_docs_units.py --assert-current` 自动核对文档与工作树。
 - **D35**：`AVD_TOKEN` 改用 `hmac.compare_digest`，README 增加威胁模型说明：
   单机本地防护，Token 不是多用户权限边界。
