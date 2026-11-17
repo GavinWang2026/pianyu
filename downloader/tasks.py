@@ -12,13 +12,25 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .config import config
 from .engine import DownloadCancelled, download, friendly_error
 
-# 终态：到达后 SSE 连接即可关闭
-TERMINAL_STAGES = ("done", "error", "cancelled")
+try:
+    from fusion.task_store import TERMINAL_STAGES as _TS, TaskRegistry
+    from fusion import persist as _persist
+except ImportError:  # 极端：仅跑 downloader 子包时
+    TERMINAL_STAGES = ("done", "error", "cancelled")
+    TaskRegistry = None  # type: ignore
+    _persist = None
+else:
+    TERMINAL_STAGES = tuple(_TS)
+
+
+def _persist_terminal(kind: str, snapshot: dict) -> None:
+    if _persist is not None:
+        _persist.save_task(kind, snapshot)
 
 
 @dataclass
@@ -37,6 +49,8 @@ class Task:
     resolution: str = ""
     tier: int = 0
     label: str = ""
+    is_live: bool = False
+    live_record_seconds: int = 0
 
     stage: str = "queued"          # queued | downloading | postprocess | done | error | cancelled
     percent: float = 0.0
@@ -46,6 +60,8 @@ class Task:
     total_bytes: int = 0
     speed: Optional[float] = None
     eta: Optional[int] = None
+    # 平滑用：不对前端暴露
+    _speed_ema: Optional[float] = field(default=None, repr=False)
 
     filename: str = ""
     filepath: str = ""
@@ -56,26 +72,65 @@ class Task:
     finished_at: Optional[float] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("_speed_ema", None)
+        return data
 
 
 class TaskManager:
-    """线程安全的任务注册表 + 事件总线。"""
+    """下载任务管理：业务逻辑 + 统一 TaskRegistry 总线/持久化。"""
 
     def __init__(self) -> None:
-        self._tasks: dict[str, Task] = {}
-        self._subscribers: dict[str, list[queue.Queue]] = {}
         self._cancels: dict[str, threading.Event] = {}
-        self._lock = threading.RLock()
+        if TaskRegistry is not None:
+            self._reg: Any = TaskRegistry(
+                kind="download",
+                to_dict=lambda t: t.to_dict(),
+                on_terminal=_persist_terminal,
+            )
+            self._tasks = self._reg._tasks
+            self._lock = self._reg.lock
+            self._restore()
+        else:
+            self._reg = None
+            self._tasks = {}
+            self._lock = threading.RLock()
+            self._subscribers: dict[str, list[queue.Queue]] = {}
+
+    def _restore(self) -> None:
+        if _persist is None:
+            return
+        for row in _persist.load_tasks("download", limit=100):
+            tid = str(row.get("id") or "")
+            if not tid or tid in self._tasks:
+                continue
+            task = Task(
+                id=tid,
+                url=str(row.get("url") or ""),
+                title=str(row.get("title") or ""),
+                stage=str(row.get("stage") or "done"),
+                percent=float(row.get("percent") or 100.0),
+                message=str(row.get("message") or ""),
+                filepath=str(row.get("filepath") or ""),
+                filename=str(row.get("filename") or ""),
+                error=str(row.get("error") or ""),
+                created_at=float(row.get("created_at") or time.time()),
+                finished_at=row.get("finished_at"),
+            )
+            self._tasks[tid] = task
 
     # ------------------------------------------------------------------ 查询
 
     def list_tasks(self) -> list[dict]:
+        if self._reg is not None:
+            return self._reg.list_dicts()
         with self._lock:
             tasks = sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
             return [t.to_dict() for t in tasks]
 
     def get_task(self, task_id: str) -> Optional[dict]:
+        if self._reg is not None:
+            return self._reg.get_dict(task_id)
         with self._lock:
             task = self._tasks.get(task_id)
             return task.to_dict() if task else None
@@ -84,6 +139,8 @@ class TaskManager:
 
     def subscribe(self, task_id: str) -> queue.Queue:
         """订阅某任务的事件流，立即收到一份当前快照。"""
+        if self._reg is not None:
+            return self._reg.subscribe(task_id)
         q: queue.Queue = queue.Queue(maxsize=512)
         with self._lock:
             self._subscribers.setdefault(task_id, []).append(q)
@@ -96,6 +153,9 @@ class TaskManager:
         return q
 
     def unsubscribe(self, task_id: str, q: queue.Queue) -> None:
+        if self._reg is not None:
+            self._reg.unsubscribe(task_id, q)
+            return
         with self._lock:
             subs = self._subscribers.get(task_id)
             if subs and q in subs:
@@ -104,6 +164,9 @@ class TaskManager:
                 self._subscribers.pop(task_id, None)
 
     def _broadcast(self, task_id: str, event: dict) -> None:
+        if self._reg is not None:
+            self._reg.broadcast(task_id, event)
+            return
         with self._lock:
             subs = list(self._subscribers.get(task_id, ()))
         for q in subs:
@@ -129,6 +192,8 @@ class TaskManager:
         thumbnail: str = "",
         extractor: str = "",
         label: str = "",
+        is_live: bool = False,
+        live_record_seconds: int = 0,
     ) -> dict:
         task = Task(
             id=uuid.uuid4().hex[:12],
@@ -144,6 +209,8 @@ class TaskManager:
             thumbnail=thumbnail,
             extractor=extractor,
             label=label,
+            is_live=bool(is_live),
+            live_record_seconds=int(live_record_seconds or 0),
         )
         cancel_event = threading.Event()
         with self._lock:
@@ -169,6 +236,13 @@ class TaskManager:
         return True
 
     def clear_finished(self) -> int:
+        if self._reg is not None:
+            n = self._reg.clear_finished()
+            with self._lock:
+                for tid in list(self._cancels):
+                    if tid not in self._tasks:
+                        self._cancels.pop(tid, None)
+            return n
         with self._lock:
             done = [tid for tid, t in self._tasks.items() if t.stage in TERMINAL_STAGES]
             for tid in done:
@@ -179,6 +253,9 @@ class TaskManager:
     # ------------------------------------------------------------------ 内部
 
     def _patch(self, task: Task, **fields) -> None:
+        if self._reg is not None:
+            self._reg.patch(task, **fields)
+            return
         with self._lock:
             for key, value in fields.items():
                 if hasattr(task, key):
@@ -194,17 +271,39 @@ class TaskManager:
         fields: dict = {}
 
         if stage == "downloading":
+            raw_speed = event.get("speed")
+            raw_eta = event.get("eta")
+            downloaded = int(event.get("downloaded_bytes") or 0)
+            total = int(event.get("total_bytes") or 0)
+            # EMA 平滑速度，再反推 ETA，减轻 yt-dlp 原值抖动
+            smooth_speed = raw_speed
+            smooth_eta = raw_eta
+            try:
+                spd = float(raw_speed) if raw_speed is not None else 0.0
+            except (TypeError, ValueError):
+                spd = 0.0
+            if spd > 0:
+                prev = task._speed_ema
+                ema = spd if prev is None else (0.25 * spd + 0.75 * float(prev))
+                fields_ema = {"_speed_ema": ema}
+                smooth_speed = ema
+                remain = max(0, total - downloaded) if total > downloaded else 0
+                if ema > 1 and remain > 0:
+                    smooth_eta = int(remain / ema)
+            else:
+                fields_ema = {}
             fields.update({
                 "stage": "downloading",
                 "percent": event.get("percent", fallback[0]),
                 "stream_index": event.get("stream_index", fallback[1]),
                 "stream_count": event.get("stream_count", fallback[2]),
-                "downloaded_bytes": event.get("downloaded_bytes", 0),
-                "total_bytes": event.get("total_bytes", 0),
-                "speed": event.get("speed"),
-                "eta": event.get("eta"),
+                "downloaded_bytes": downloaded,
+                "total_bytes": total,
+                "speed": smooth_speed,
+                "eta": smooth_eta,
                 "filename": event.get("filename") or fallback[3],
                 "message": "",
+                **fields_ema,
             })
         elif stage == "postprocess":
             fields.update({"stage": "postprocess", "message": event.get("message") or "正在处理…"})
@@ -230,6 +329,8 @@ class TaskManager:
                     "format_id": task.format_id,
                     "audio_format_id": task.audio_format_id,
                     "tier": task.tier,
+                    "is_live": task.is_live,
+                    "live_record_seconds": task.live_record_seconds,
                 },
                 cfg=cfg,
                 on_progress=lambda event: self._on_progress(task, event),

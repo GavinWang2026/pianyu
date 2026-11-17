@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark light" />
 <title>素材工作台 · 本地处理</title>
 <link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/flagship.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%236d5efc'/%3E%3Cpath d='M16 8v11m0 0l-4.5-4.5M16 19l4.5-4.5M9 23h14' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -29,12 +30,13 @@
         </svg>
       </div>
       <div class="brand-text">
-        <h1>素材工作台</h1>
-        <p>本地提取 · 数据不出机</p>
+        <h1 data-i18n="brand.title">素材工作台</h1>
+        <p data-i18n="brand.sub">本地提取 · 数据不出机</p>
       </div>
     </div>
 
     <div class="topbar-actions">
+      <button class="icon-btn" id="btnLang" type="button" title="Language / 语言" aria-label="Language">EN</button>
       <button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">
         <svg class="ico ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
@@ -261,6 +263,9 @@
           </div>
           <div class="ts-tools">
             <span class="ts-count" id="tsCount"></span>
+            <button class="ghost-btn sm" id="btnTsEdit" type="button" title="改字后可导出更新的 SRT">校对</button>
+            <button class="ghost-btn sm" id="btnTsUndo" type="button" hidden title="撤销">撤销</button>
+            <button class="ghost-btn sm" id="btnTsRedo" type="button" hidden title="重做">重做</button>
             <button class="ghost-btn sm" id="btnTsCopy">复制全文</button>
             <div class="export-wrap">
               <button class="ghost-btn sm" id="btnTsExport">导出</button>
@@ -379,6 +384,22 @@
         </div>
       </div>
 
+      <div class="field-group-title">磁盘保留</div>
+      <div class="field">
+        <label for="setRetainDays">任务快照保留（天）</label>
+        <input id="setRetainDays" type="number" min="1" max="365" step="1" value="7" />
+        <p class="field-tip">超过天数的任务记录会在启动/排队时清理；文稿文件优先保留。</p>
+      </div>
+      <div class="field">
+        <label for="setOutputsMaxGb">产物目录上限（GB）</label>
+        <input id="setOutputsMaxGb" type="number" min="0" max="500" step="0.5" value="5" />
+        <p class="field-tip">0 = 不限；超限时优先删除媒体，保留 Markdown / SRT / DOCX / PDF。</p>
+        <div class="field-actions">
+          <button class="ghost-btn sm" id="btnStoragePurge" type="button">立即清理</button>
+          <span class="field-tip" id="storageStatsHint"></span>
+        </div>
+      </div>
+
       <div class="field">
         <label for="setProxyMode">代理模式</label>
         <select id="setProxyMode">
@@ -428,6 +449,62 @@
           <option value="faster">Faster-Whisper（通用）</option>
         </select>
         <p class="field-tip" id="asrEngineTip">按当前机器自动挑最合适的引擎。</p>
+      </div>
+
+      <div class="field">
+        <label for="setAsrHotwords">热词 / 术语表</label>
+        <textarea id="setAsrHotwords" rows="3" spellcheck="false"
+          placeholder="专有名词、产品名、人名…（逗号或换行分隔，最多 200 词）"></textarea>
+        <p class="field-tip">写入语音识别提示词，减少专名错字；有平台字幕时不生效。</p>
+      </div>
+
+      <div class="field">
+        <label for="setPlaylistMax">播放列表展开条数</label>
+        <input id="setPlaylistMax" type="number" min="1" max="50" step="1" value="1" />
+        <p class="field-tip">1 = 只处理当前/首条；2–50 = 展开前 N 条进入批量队列。</p>
+      </div>
+
+      <div class="field">
+        <label for="setObsidianDir">Obsidian 库目录</label>
+        <input id="setObsidianDir" type="text" spellcheck="false"
+          placeholder="~/Documents/Obsidian/Vault（留空不直写）" />
+        <p class="field-tip">完成后把 Markdown 写入该目录；必须位于用户主目录下。</p>
+      </div>
+
+      <div class="field">
+        <label for="setLiveRecord">直播录制时长（秒）</label>
+        <input id="setLiveRecord" type="number" min="-1" max="7200" step="60" value="300" />
+        <p class="field-tip">0 = 拒绝；-1 = 录到点取消；60–7200 = 限时片段（默认 300）。已结束的直播回放按完整 VOD 下载。</p>
+      </div>
+
+      <div class="field">
+        <label for="setDownloadRate">下载限速（KB/s）</label>
+        <input id="setDownloadRate" type="number" min="0" max="100000" step="100" value="0" />
+        <p class="field-tip">0 = 不限速；弱网或共享带宽时可设为 500–2000。</p>
+      </div>
+
+      <div class="field">
+        <label class="check">
+          <input id="setAsrDiarize" type="checkbox" />
+          <span>说话人启发式标注（A/B）</span>
+        </label>
+        <p class="field-tip">按停顿交替标注，非神经网络分离；访谈稿可读性更好。</p>
+      </div>
+
+      <div class="field-group-title">分发出口（可选）</div>
+
+      <div class="field">
+        <label for="setNotionToken">Notion Integration Token</label>
+        <input id="setNotionToken" type="password" spellcheck="false" placeholder="secret_…（仅存本机）" />
+      </div>
+      <div class="field">
+        <label for="setNotionDb">Notion 数据库 ID</label>
+        <input id="setNotionDb" type="text" spellcheck="false" placeholder="32 位 database_id" />
+      </div>
+      <div class="field">
+        <label for="setFeishuWebhook">飞书机器人 Webhook</label>
+        <input id="setFeishuWebhook" type="password" spellcheck="false" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" />
+        <p class="field-tip">仅 HTTPS；推送已生成的 Markdown 摘要卡片。</p>
       </div>
 
       <div class="field-group-title">文案整理（可选）</div>
@@ -520,6 +597,7 @@
 
 <div class="toast-wrap" id="toastWrap"></div>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/flagship.js"></script>
 </body>

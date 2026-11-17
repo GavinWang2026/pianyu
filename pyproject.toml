@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "avd-flagship"
+version = "2.0.0"
+description = "AVD Flagship — offline media-to-knowledge workbench (yt-dlp vendored)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Hyht-Team" }]
+keywords = ["yt-dlp", "asr", "knowledge", "offline", "whisper"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Multimedia :: Video",
+  "Private :: Do Not Upload",
+]
+# 主服务刻意零第三方运行时依赖（yt-dlp 内嵌于 vendor/）。
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6"]
+
+[project.scripts]
+avd = "boot:main"
+avd-flagship = "boot:main"
+
+[tool.setuptools]
+py-modules = ["boot", "server", "app", "doctor"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["fusion*", "downloader*", "tools*"]
+exclude = ["tests*", "vendor*", "models*", "outputs*", "downloads*", "logs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["runtime", "vendor", "models", "outputs", ".venv", ".venv-asr", "dist", "node_modules"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

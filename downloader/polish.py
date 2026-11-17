@@ -29,12 +29,24 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .asr import resolve_python
 from .config import config
 
-TERMINAL_STAGES = ("done", "error", "cancelled")
+try:
+    from fusion.task_store import TERMINAL_STAGES as _TS, TaskRegistry
+    from fusion import persist as _persist
+    TERMINAL_STAGES = tuple(_TS)
+except ImportError:
+    TaskRegistry = None  # type: ignore
+    _persist = None
+    TERMINAL_STAGES = ("done", "error", "cancelled")
+
+
+def _persist_terminal(kind: str, snapshot: dict) -> None:
+    if _persist is not None:
+        _persist.save_task(kind, snapshot)
 
 # 可选的整理动作
 OPERATIONS = ("clean", "summary", "keywords")
@@ -289,6 +301,30 @@ def to_simplified(text: str) -> str:
     return converted if proc.returncode == 0 and converted else text
 
 
+_LEADING_FILLERS = (
+    "呃", "嗯", "啊", "那个", "就是说", "然后呢", "然后", "我觉得吧",
+    "咋说呢", "怎么说呢", "其实吧",
+)
+
+
+def strip_leading_fillers(text: str) -> str:
+    """剥离句首口语填充词（连续出现才剥），尽量保留句义。"""
+    t = (text or "").strip()
+    if not t:
+        return t
+    changed = True
+    while changed:
+        changed = False
+        for f in sorted(_LEADING_FILLERS, key=len, reverse=True):
+            if t.startswith(f):
+                rest = t[len(f):].lstrip("，,、 \t")
+                if rest:
+                    t = rest
+                    changed = True
+                    break
+    return t
+
+
 def local_polish(
     segments: list[dict],
     *,
@@ -297,11 +333,26 @@ def local_polish(
 ) -> dict:
     """零依赖整理：去重 → 分段 → 标点归一。返回与任务结果同构的字典。"""
     cleaned = dedupe_segments(segments)
+    cleaned = [
+        {**seg, "text": strip_leading_fillers(str(seg.get("text") or ""))}
+        for seg in cleaned
+    ]
+    cleaned = [s for s in cleaned if str(s.get("text") or "").strip()]
     paragraphs = segment_paragraphs(cleaned, gap_break=1.4)
 
     if convert_simplified and language in ("zh", "auto"):
-        for item in paragraphs:
-            item["text"] = to_simplified(item["text"])
+        # PERF-01：整篇拼一次转换，避免逐段起子进程变成分钟级
+        sep = "\n\u200b\n"  # 零宽字符分隔，转换后按段还原
+        blob = sep.join(item["text"] for item in paragraphs)
+        converted = to_simplified(blob)
+        parts = converted.split(sep)
+        if len(parts) == len(paragraphs):
+            for item, part in zip(paragraphs, parts):
+                item["text"] = part
+        else:
+            # 分隔符被吃掉时退回逐段（极少见）
+            for item in paragraphs:
+                item["text"] = to_simplified(item["text"])
         joined = "\n\n".join(item["text"] for item in paragraphs)
     else:
         joined = "\n\n".join(item["text"] for item in paragraphs)
@@ -418,6 +469,7 @@ def chat_stream(
     cancel_event: Optional[threading.Event] = None,
     max_tokens: int = 4096,
     temperature: float = 0.3,
+    _continuation: bool = False,
 ) -> str:
     """流式对话，逐段回调增量文本，返回完整回复。
 
@@ -449,6 +501,7 @@ def chat_stream(
     request = urllib.request.Request(f"{root}/chat/completions", data=data, headers=headers)
     pieces: list[str] = []
     reasoning_chars = 0
+    finish_reason = ""
 
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -479,7 +532,12 @@ def chat_stream(
                 choices = event.get("choices") or []
                 if not choices:
                     continue
-                delta = choices[0].get("delta") or {}
+                choice0 = choices[0] or {}
+                # LLM-01：检测截断，禁止静默丢尾
+                fr = choice0.get("finish_reason") or choice0.get("finishReason") or ""
+                if fr:
+                    finish_reason = str(fr)
+                delta = choice0.get("delta") or {}
                 # 思考型模型会把思维链塞进 reasoning / thinking 字段，
                 # 那部分不该混进正文，只统计长度用于诊断
                 thinking = delta.get("reasoning") or delta.get("thinking") or ""
@@ -497,6 +555,28 @@ def chat_stream(
         raise LLMError(f"连接模型服务失败：{exc.reason}. 请确认服务已启动、地址填写正确") from exc
 
     text = "".join(pieces).strip()
+    if finish_reason == "length":
+        # 自动续写至多一次；仍截断则显式报错（不许静默）
+        if text and not _continuation:
+            cont_messages = list(messages) + [
+                {"role": "assistant", "content": text},
+                {"role": "user", "content": "请从上文断开处继续，不要重复已写内容。"},
+            ]
+            try:
+                more = chat_stream(
+                    base_url, api_key, model, cont_messages,
+                    on_delta=on_delta, cancel_event=cancel_event,
+                    max_tokens=max_tokens, temperature=temperature,
+                    _continuation=True,
+                )
+                if more:
+                    return (text + more).strip()
+            except LLMError:
+                pass
+        raise LLMError(
+            "模型输出被 max_tokens 截断（finish_reason=length）。"
+            "请缩短原文、提高 max_tokens，或分段整理后重试。"
+        )
     if not text:
         if reasoning_chars > 0:
             raise LLMError(
@@ -650,22 +730,62 @@ class PolishTask:
 
 
 class PolishManager:
-    """线程安全的整理任务注册表 + 事件总线（与 AsrManager 同构）。"""
+    """整理任务管理：业务逻辑 + 统一 TaskRegistry 总线/持久化。"""
 
     def __init__(self) -> None:
-        self._tasks: dict[str, PolishTask] = {}
-        self._subscribers: dict[str, list[queue.Queue]] = {}
         self._cancels: dict[str, threading.Event] = {}
-        self._lock = threading.RLock()
+        if TaskRegistry is not None:
+            self._reg: Any = TaskRegistry(
+                kind="polish",
+                to_dict=lambda t: t.to_dict(),
+                queue_size=2048,
+                on_terminal=_persist_terminal,
+            )
+            self._tasks = self._reg._tasks
+            self._lock = self._reg.lock
+            self._restore()
+        else:
+            self._reg = None
+            self._tasks = {}
+            self._lock = threading.RLock()
+            self._subscribers: dict[str, list[queue.Queue]] = {}
+
+    def _restore(self) -> None:
+        if _persist is None:
+            return
+        for row in _persist.load_tasks("polish", limit=80):
+            tid = str(row.get("id") or "")
+            if not tid or tid in self._tasks:
+                continue
+            task = PolishTask(
+                id=tid,
+                source_id=str(row.get("source_id") or ""),
+                title=str(row.get("title") or ""),
+                stage=str(row.get("stage") or "done"),
+                percent=float(row.get("percent") or 100.0),
+                message=str(row.get("message") or ""),
+                text=str(row.get("text") or ""),
+                summary=str(row.get("summary") or ""),
+                keywords=list(row.get("keywords") or []),
+                paragraphs=list(row.get("paragraphs") or []),
+                error=str(row.get("error") or ""),
+                created_at=float(row.get("created_at") or time.time()),
+                finished_at=row.get("finished_at"),
+            )
+            self._tasks[tid] = task
 
     # ------------------------------------------------------------------ 查询
 
     def list_tasks(self) -> list[dict]:
+        if self._reg is not None:
+            return self._reg.list_dicts()
         with self._lock:
             tasks = sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
             return [task.to_dict() for task in tasks]
 
     def get_task(self, task_id: str) -> Optional[dict]:
+        if self._reg is not None:
+            return self._reg.get_dict(task_id)
         with self._lock:
             task = self._tasks.get(task_id)
             return task.to_dict() if task else None
@@ -681,22 +801,28 @@ class PolishManager:
     # ------------------------------------------------------------------ 订阅
 
     def subscribe(self, task_id: str) -> queue.Queue:
-        channel: queue.Queue = queue.Queue(maxsize=2048)
         with self._lock:
-            self._subscribers.setdefault(task_id, []).append(channel)
             task = self._tasks.get(task_id)
             snapshot = task.to_dict() if task else None
+        prelude: list[dict] = []
+        if snapshot is not None and snapshot.get("stage") == "done":
+            prelude.append({
+                "type": "result",
+                "text": snapshot.get("text", ""),
+                "paragraphs": snapshot.get("paragraphs", []),
+                "summary": snapshot.get("summary", ""),
+                "keywords": snapshot.get("keywords", []),
+            })
+        if self._reg is not None:
+            return self._reg.bus.subscribe(
+                task_id, snapshot=snapshot, prelude=prelude)
+        channel: queue.Queue = queue.Queue(maxsize=2048)
+        for event in prelude:
+            self._enqueue(channel, event)
         if snapshot is not None:
-            # 任务若已结束，先补发完整结果，避免「秒完成 → 结果收不到」
-            if snapshot.get("stage") == "done":
-                self._enqueue(channel, {
-                    "type": "result",
-                    "text": snapshot.get("text", ""),
-                    "paragraphs": snapshot.get("paragraphs", []),
-                    "summary": snapshot.get("summary", ""),
-                    "keywords": snapshot.get("keywords", []),
-                })
             self._enqueue(channel, {"type": "task", "task": snapshot})
+        with self._lock:
+            self._subscribers.setdefault(task_id, []).append(channel)
         return channel
 
     @staticmethod
@@ -707,6 +833,9 @@ class PolishManager:
             pass
 
     def unsubscribe(self, task_id: str, channel: queue.Queue) -> None:
+        if self._reg is not None:
+            self._reg.unsubscribe(task_id, channel)
+            return
         with self._lock:
             subs = self._subscribers.get(task_id)
             if subs and channel in subs:
@@ -715,6 +844,9 @@ class PolishManager:
                 self._subscribers.pop(task_id, None)
 
     def _broadcast(self, task_id: str, event: dict) -> None:
+        if self._reg is not None:
+            self._reg.broadcast(task_id, event)
+            return
         with self._lock:
             subs = list(self._subscribers.get(task_id, ()))
         for channel in subs:
@@ -724,6 +856,9 @@ class PolishManager:
                 pass
 
     def _patch(self, task: PolishTask, **fields) -> None:
+        if self._reg is not None:
+            self._reg.patch(task, **fields)
+            return
         with self._lock:
             for key, value in fields.items():
                 if hasattr(task, key):

@@ -30,6 +30,46 @@ class DownloadCancelled(Exception):
     """用户在下载过程中主动取消。"""
 
 
+def live_record_seconds(cfg: dict | None = None) -> int:
+    """直播录制秒数：0=拒绝；-1=录到取消；60–7200=限时片段。"""
+    if cfg is None:
+        from .config import config as _cfg
+        cfg = _cfg.as_dict()
+    try:
+        n = int((cfg or {}).get("live_record_seconds") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n == -1:
+        return -1
+    if n <= 0:
+        return 0
+    return max(60, min(7200, n))
+
+
+def apply_live_clip_opts(opts: dict, seconds: int) -> dict:
+    """给直播下载加上 ffmpeg 时长上限；seconds=-1 表示录到用户取消（不加 -t）。"""
+    opts["external_downloader"] = {
+        "default": "ffmpeg",
+        "m3u8": "ffmpeg",
+        "http_dash_segments": "ffmpeg",
+    }
+    opts["hls_use_mpegts"] = True
+    if int(seconds) == -1:
+        # 不设 -t：依赖任务取消终止 ffmpeg / yt-dlp
+        return opts
+    secs = max(60, min(7200, int(seconds)))
+    extra = ["-t", str(secs)]
+    raw = opts.get("external_downloader_args")
+    if isinstance(raw, dict):
+        merged = dict(raw)
+        prev = list(merged.get("ffmpeg_i") or [])
+        merged["ffmpeg_i"] = prev + extra
+        opts["external_downloader_args"] = merged
+    else:
+        opts["external_downloader_args"] = {"ffmpeg_i": extra}
+    return opts
+
+
 # ---------------------------------------------------------------------------
 # 代理策略
 # ---------------------------------------------------------------------------
@@ -177,6 +217,58 @@ def _tier_of(fmt: dict) -> tuple[int, str, str]:
     return tier, label, resolution
 
 
+_HDR_HINTS = ("hdr", "hlg", "pq", "dolby vision", "dvhe", "dvh1")
+_LANG_ZH = {
+    "zh": "国语", "zh-cn": "国语", "zh-hans": "国语", "cmn": "国语",
+    "zh-tw": "粤语/繁", "zh-hant": "粤语/繁", "yue": "粤语",
+    "en": "英语", "ja": "日语", "ko": "韩语",
+}
+
+
+def _dynamic_range_of(fmt: dict) -> str:
+    note = " ".join(
+        str(fmt.get(k) or "") for k in ("dynamic_range", "format_note", "format", "vcodec")
+    ).lower()
+    if any(h in note for h in _HDR_HINTS):
+        if "dolby" in note or "dvhe" in note or "dvh1" in note:
+            return "Dolby Vision"
+        return "HDR"
+    return "SDR"
+
+
+def _bitrate_mbps(fmt: dict, audio: dict | None = None, *, muxed: bool = True) -> float:
+    tbr = float(fmt.get("tbr") or fmt.get("vbr") or 0)
+    if not muxed and audio:
+        tbr += float(audio.get("tbr") or audio.get("abr") or 0)
+    if tbr <= 0 and audio and not _has_video(fmt):
+        tbr = float(audio.get("tbr") or audio.get("abr") or 0)
+    return round(tbr / 1000.0, 2) if tbr >= 100 else (round(tbr, 1) if tbr else 0.0)
+
+
+def _audio_lang_label(fmt: dict | None) -> str:
+    if not fmt:
+        return ""
+    raw = str(fmt.get("language") or fmt.get("language_preference") or "").strip()
+    if not raw:
+        return ""
+    key = raw.lower().replace("_", "-")
+    if key in _LANG_ZH:
+        return _LANG_ZH[key]
+    short = key.split("-")[0]
+    return _LANG_ZH.get(short, raw)
+
+
+def _enrich_label(base: str, *, tbr_mbps: float, dynamic_range: str, audio_lang: str) -> str:
+    parts = [base]
+    if tbr_mbps > 0:
+        parts.append(f"{tbr_mbps:g} Mbps")
+    if dynamic_range and dynamic_range != "SDR":
+        parts.append(dynamic_range)
+    if audio_lang:
+        parts.append(audio_lang)
+    return " · ".join(parts)
+
+
 def summarize_formats(info: dict) -> list[dict]:
     """把 yt-dlp 的原始 formats 聚合成用户可选的清晰度档位。"""
     raw_formats = [f for f in (info.get("formats") or []) if f.get("format_id")]
@@ -184,6 +276,7 @@ def summarize_formats(info: dict) -> list[dict]:
     video_formats = [f for f in all_video if f.get("height")]
     best_audio = _pick_best_audio(raw_formats)
     audio_size = _size_of(best_audio) if best_audio else 0
+    audio_lang = _audio_lang_label(best_audio)
 
     # 按「短边档位」分桶，每桶取最优流；桶内再保留真实分辨率用于展示
     buckets: dict[int, dict] = {}
@@ -200,10 +293,13 @@ def summarize_formats(info: dict) -> list[dict]:
         fmt = buckets[tier]
         muxed = _has_audio(fmt)
         size = _size_of(fmt) + (0 if muxed else audio_size)
-        _tier, label, resolution = _tier_of(fmt)
+        _tier, base_label, resolution = _tier_of(fmt)
+        tbr = _bitrate_mbps(fmt, best_audio, muxed=muxed)
+        dr = _dynamic_range_of(fmt)
+        lang = _audio_lang_label(fmt) if muxed else audio_lang
         options.append({
             "id": f"h{tier}",
-            "label": label,
+            "label": _enrich_label(base_label, tbr_mbps=tbr, dynamic_range=dr, audio_lang=lang),
             "tier": tier,
             "resolution": resolution,
             "height": fmt.get("height"),
@@ -216,6 +312,9 @@ def summarize_formats(info: dict) -> list[dict]:
             "filesize": size or None,
             "needs_merge": not muxed,
             "audio_only": False,
+            "tbr_mbps": tbr or None,
+            "dynamic_range": dr,
+            "audio_language": lang or None,
         })
 
     # 兜底：确认有视频流、但取不到分辨率（直链文件、部分自建站常见）。
@@ -237,9 +336,12 @@ def summarize_formats(info: dict) -> list[dict]:
             else:
                 muxed = True
 
+            tbr = _bitrate_mbps(best, best_audio, muxed=muxed)
+            dr = _dynamic_range_of(best)
+            lang = _audio_lang_label(best) if muxed else audio_lang
             options.append({
                 "id": "best",
-                "label": "最佳画质",
+                "label": _enrich_label("最佳画质", tbr_mbps=tbr, dynamic_range=dr, audio_lang=lang),
                 "tier": 0,
                 "resolution": "原始画质",
                 "height": best.get("height"),
@@ -252,6 +354,9 @@ def summarize_formats(info: dict) -> list[dict]:
                 "filesize": (_size_of(best) + (0 if muxed else audio_size)) or None,
                 "needs_merge": not muxed,
                 "audio_only": False,
+                "tbr_mbps": tbr or None,
+                "dynamic_range": dr,
+                "audio_language": lang or None,
             })
 
     # 推荐档：不超过 1080P 的最高一档（画质与体积的平衡点）
@@ -261,9 +366,10 @@ def summarize_formats(info: dict) -> list[dict]:
 
     # 仅音频档（保留原始音轨，M4A 容器，兼容性最好）
     audio_total = (_size_of(best_audio) if best_audio else 0) or None
+    audio_tbr = _bitrate_mbps(best_audio or {}, muxed=True) if best_audio else 0.0
     options.append({
         "id": "audio",
-        "label": "仅音频",
+        "label": _enrich_label("仅音频", tbr_mbps=audio_tbr, dynamic_range="SDR", audio_lang=audio_lang),
         "tier": 0,
         "resolution": "原始音轨",
         "height": 0,
@@ -277,6 +383,9 @@ def summarize_formats(info: dict) -> list[dict]:
         "needs_merge": False,
         "audio_only": True,
         "recommended": False,
+        "tbr_mbps": audio_tbr or None,
+        "dynamic_range": None,
+        "audio_language": audio_lang or None,
     })
     return options
 
@@ -425,6 +534,12 @@ def _base_opts(cfg: dict, url: str, logger=None) -> dict:
     browser = (cfg.get("cookies_from_browser") or "").strip()
     if browser:
         opts["cookiesfrombrowser"] = (browser,)
+    try:
+        rate_kb = int(cfg.get("download_rate_kbps") or 0)
+    except (TypeError, ValueError):
+        rate_kb = 0
+    if rate_kb > 0:
+        opts["ratelimit"] = rate_kb * 1024
     return opts
 
 
@@ -463,8 +578,13 @@ def probe(url: str, cfg: Optional[dict] = None) -> dict:
             raise RuntimeError("该链接下没有可下载的视频")
         info = entries[0]
 
-    if info.get("is_live"):
-        raise RuntimeError("这是直播流，暂不支持下载")
+    is_live = bool(info.get("is_live"))
+    live_secs = live_record_seconds(cfg) if is_live else 0
+    if is_live and live_secs <= 0:
+        raise RuntimeError(
+            "这是直播流。可在设置里把「直播录制时长」设为 60–3600 秒以限时录制一段；"
+            "当前为 0（拒绝）"
+        )
 
     qualities = summarize_formats(info)
     if not qualities:
@@ -478,7 +598,7 @@ def probe(url: str, cfg: Optional[dict] = None) -> dict:
         "id": info.get("id"),
         "title": info.get("title") or "未命名视频",
         "thumbnail": _pick_thumbnail(info),
-        "duration": info.get("duration"),
+        "duration": info.get("duration") or (live_secs if is_live else None),
         "uploader": info.get("uploader") or info.get("channel") or info.get("uploader_id") or "",
         "webpage_url": info.get("webpage_url") or url,
         "extractor": info.get("extractor_key") or info.get("extractor") or "",
@@ -487,6 +607,8 @@ def probe(url: str, cfg: Optional[dict] = None) -> dict:
         "description": (info.get("description") or "")[:400],
         "qualities": qualities,
         "subtitles": describe_subtitles(info),
+        "is_live": is_live,
+        "live_record_seconds": live_secs if is_live else 0,
     }
 
 
@@ -616,6 +738,15 @@ def download(
         # 在候选流之间优先 mp4/m4a + h264/aac，最大化兼容性
         "format_sort": ["ext:mp4:m4a", "vcodec:h264", "acodec:aac"],
     })
+
+    # 直播：限时片段，避免无限拉流
+    if option.get("is_live"):
+        secs = int(option.get("live_record_seconds") or 0) or live_record_seconds(cfg)
+        if secs <= 0:
+            raise RuntimeError("这是直播流，当前未开启限时录制（live_record_seconds=0）")
+        apply_live_clip_opts(opts, secs)
+        if on_log:
+            on_log(f"直播限时录制 {secs} 秒…")
 
     if audio_only:
         opts["postprocessors"] = [{

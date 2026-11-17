@@ -72,9 +72,7 @@ _UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
-_thumb_cache: dict[str, tuple[float, str, bytes]] = {}
-_thumb_lock = threading.Lock()
-_THUMB_TTL = 3600
+# 缩略图缓存已迁入 fusion.thumb_cache（与 hardening 限额共用）
 
 
 # ---------------------------------------------------------------------------
@@ -127,41 +125,15 @@ def _open_with_default_app(target: str) -> bool:
 
 
 def _fetch_thumbnail(url: str) -> tuple[str, bytes]:
-    """服务端代取缩略图，绕过浏览器侧的防盗链与 CORS 限制。"""
-    now = time.time()
-    with _thumb_lock:
-        cached = _thumb_cache.get(url)
-        if cached and now - cached[0] < _THUMB_TTL:
-            return cached[1], cached[2]
+    """服务端代取缩略图：委托 fusion.thumb_cache（统一旁路）。"""
+    from fusion import thumb_cache
 
     cfg = config.as_dict()
     proxy = cfg.get("proxy_url") if cfg.get("proxy_mode") == "always" else None
     if cfg.get("proxy_mode") == "auto":
         from downloader import resolve_proxy
-
         proxy = resolve_proxy(url, cfg)
-
-    headers = {"User-Agent": _UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
-    referer = _referer_for(url)
-    if referer:
-        headers["Referer"] = referer
-
-    request = urllib.request.Request(url, headers=headers)
-    if proxy:
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        )
-    else:
-        opener = urllib.request.build_opener()
-
-    with opener.open(request, timeout=15) as response:
-        content_type = response.headers.get("Content-Type", "image/jpeg")
-        body = response.read(6 * 1024 * 1024)
-
-    with _thumb_lock:
-        _thumb_cache[url] = (now, content_type, body)
-        hardening.trim_thumb_cache(_thumb_cache, now)
-    return content_type, body
+    return thumb_cache.get_or_fetch(url, proxy=proxy or None)
 
 
 _DATE_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
@@ -193,8 +165,13 @@ def _needs_simplified(task: Optional[dict]) -> bool:
 # ---------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "VideoDawnload/1.0"
+    server_version = "AVD"
+    sys_version = ""
     protocol_version = "HTTP/1.1"
+
+    def version_string(self) -> str:
+        """不泄露实现与版本号（原先会回 ``VideoDawnload/1.0 Python/3.x``）。"""
+        return self.server_version or "AVD"
 
     # ------------------------------------------------------------------ 基础
 
@@ -211,11 +188,37 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------------ 响应助手
 
+    def _security_headers(self) -> None:
+        """SEC-04：全站 nosniff + 收紧的 CSP + 现代浏览器隔离策略。
+
+        P2（第九轮）：补齐 Referrer-Policy / Permissions-Policy（关掉摄像头、
+        麦克风、定位、Payment、USB 等本应用不用的能力），减少本机页对内网
+        其他资源的指纹面。
+        """
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+            "serial=(), midi=(), interest-cohort=()",
+        )
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        # script-src / style-src 均收紧为 'self'（无内联脚本、无 style= / <style> 注入）。
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data: blob:; "
+            "style-src 'self'; script-src 'self'; "
+            "connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; "
+            "base-uri 'self'; form-action 'self'",
+        )
+
     def _send_bytes(self, body: bytes, content_type: str, status: int = 200, cache: str = "no-store") -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
+        self._security_headers()
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -231,21 +234,26 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": False, "error": message}, status)
 
     def _read_json(self) -> dict:
+        """HTTP-01：区分空体与非法 JSON；后者抛 ValueError，由上层回 400。"""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            return {}
+            length = 0
         if length <= 0:
             return {}
         if length > hardening.MAX_JSON_BYTES:
             raise hardening.PayloadTooLarge(
                 f"请求体过大，上限 {hardening.MAX_JSON_BYTES // 1024} KB")
         raw = self.rfile.read(length)
+        if not raw.strip():
+            return {}
         try:
             data = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"请求体不是合法 JSON：{exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("请求体必须是 JSON 对象")
+        return data
 
     def _origin_allowed(self) -> bool:
         """阻断跨站写操作。同源请求（或本地工具、无 Origin 的请求）放行。"""
@@ -284,6 +292,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self._security_headers()
             self.end_headers()
             return
         relative = "index.html" if route in ("/", "") else route.lstrip("/")
@@ -293,7 +302,9 @@ class Handler(BaseHTTPRequestHandler):
         safe = guards.within(STATIC_DIR, candidate)
         if safe is None or not safe.is_file():
             self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", "0")
+            self._security_headers()
             self.end_headers()
             return
         self.send_response(200)
@@ -302,6 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             mimetypes.guess_type(str(safe))[0] or "application/octet-stream",
         )
         self.send_header("Content-Length", str(safe.stat().st_size))
+        self._security_headers()
         self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
@@ -320,11 +332,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/asr/upload":
             self._handle_asr_upload(parsed.query)
             return
+        if route == "/api/pipeline/upload":
+            self._handle_pipeline_upload(parsed.query)
+            return
 
         try:
             self._handle_api_post(route)
         except hardening.PayloadTooLarge as exc:
             self._fail(str(exc), HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        except ValueError as exc:
+            # HTTP-01：非法 JSON 等明确 400，不再吞成「缺少 url」
+            self._fail(str(exc), HTTPStatus.BAD_REQUEST)
 
     # ------------------------------------------------------------------ 静态资源
 
@@ -384,7 +402,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_bytes(transparent, "image/png", cache="no-store")
                 return
-            self._send_bytes(body, content_type, cache="public, max-age=3600")
+            # SEC-04：限定 image/*，拒绝把 HTML/SVG 脚本当缩略图回显
+            ct = (content_type or "").split(";")[0].strip().lower()
+            if not ct.startswith("image/") or ct in ("image/svg+xml",):
+                ct = "image/jpeg"
+            self._send_bytes(body, ct, cache="public, max-age=3600")
 
         elif route == "/api/progress":
             task_id = (query.get("id") or [""])[0]
@@ -486,6 +508,10 @@ class Handler(BaseHTTPRequestHandler):
             # 分离式 video+audio 需要两条流，提前告知前端，避免进度条来回跳
             stream_count = 2 if (not audio_only and format_id and audio_format_id) else 1
 
+            try:
+                live_secs = int(payload.get("live_record_seconds") or 0)
+            except (TypeError, ValueError):
+                live_secs = 0
             task = manager.create_task(
                 url,
                 height=height,
@@ -500,6 +526,8 @@ class Handler(BaseHTTPRequestHandler):
                 thumbnail=str(payload.get("thumbnail") or "")[:800],
                 extractor=str(payload.get("extractor") or "")[:64],
                 label=str(payload.get("label") or "")[:40],
+                is_live=payload.get("is_live") in (True, "true", "1", 1, "yes"),
+                live_record_seconds=live_secs,
             )
             self._ok(task=task)
             return
@@ -778,6 +806,78 @@ class Handler(BaseHTTPRequestHandler):
             engine=engine,
         )
 
+    def _handle_pipeline_upload(self, query: str) -> None:
+        """D11：拖入本地媒体 → 旗舰版一键知识稿流水线。"""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self._fail("上传内容为空")
+            return
+        if length > MAX_UPLOAD_BYTES:
+            self._fail(f"文件过大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+            return
+
+        raw_name = self.headers.get("X-File-Name") or "media"
+        try:
+            decoded = urllib.parse.unquote(raw_name)
+        except Exception:  # noqa: BLE001
+            decoded = "media"
+        safe_name = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", Path(decoded).name)[:80] or "media"
+
+        try:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._fail(f"无法创建上传目录：{exc}")
+            return
+
+        dest = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+        written = 0
+        try:
+            with dest.open("wb") as handle:
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(262144, remaining))
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    written += len(chunk)
+                    remaining -= len(chunk)
+        except OSError as exc:
+            self._fail(f"写入上传文件失败：{exc}")
+            return
+
+        if written <= 0 or written != length:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._fail(
+                "上传不完整" if written else "上传内容为空",
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        params = urllib.parse.parse_qs(query or "")
+        language = (params.get("language") or ["zh"])[0]
+        want_polish = (params.get("want_polish") or ["1"])[0] not in ("0", "false", "no")
+        try:
+            from fusion import pipeline as _pipe
+            task = _pipe.manager().start_local(
+                str(dest),
+                title=Path(safe_name).stem,
+                language=language,
+                want_polish=want_polish,
+            )
+        except ValueError as exc:
+            self._fail(str(exc), HTTPStatus.FORBIDDEN)
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"无法启动：{exc}", HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._ok(task=task)
+
     # ------------------------------------------------------------------ SSE
 
     def _write_chunk(self, data: bytes) -> None:
@@ -801,6 +901,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
 
+        # SSE-01：事件 ID，便于 Last-Event-ID 续传
+        last_id = 0
+        raw_last = (self.headers.get("Last-Event-ID") or "").strip()
+        if raw_last.isdigit():
+            last_id = int(raw_last)
+
         subscription = store.subscribe(task_id)
         terminal = {"done", "error", "cancelled"}
         try:
@@ -811,8 +917,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._write_chunk(b": ping\n\n")
                     continue
 
+                last_id += 1
                 payload = json.dumps(event, ensure_ascii=False).encode("utf-8")
-                self._write_chunk(b"data: " + payload + b"\n\n")
+                self._write_chunk(
+                    f"id: {last_id}\n".encode("utf-8") + b"data: " + payload + b"\n\n"
+                )
 
                 task = event.get("task") if event.get("type") == "task" else None
                 if task and task.get("stage") in terminal:

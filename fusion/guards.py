@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import os
 import socket
@@ -46,10 +47,20 @@ IMAGE_CDN_SUFFIXES: tuple[str, ...] = (
     "vimage.com", "yximgs.com", "smtcdns.com", "akamaized.net",
 )
 
-SENSITIVE_KEYS = ("llm_api_key", "api_key", "token", "password", "secret", "cookie")
+# 精确键名白名单（禁止子串匹配）：避免 cookies_from_browser 被打成 "***"
+# 导致前端 select 失配、保存时静默清空配置（SEC-02）。
+SENSITIVE_KEYS = frozenset({
+    "llm_api_key", "api_key", "token", "password", "secret",
+    "cookie", "cookies", "cookiefile", "cookie_file",
+    "notion_token", "feishu_webhook",
+})
+# 明确不脱敏的配置键（浏览器名 / 开关，不是凭据本体）
+REDACT_EXCLUDE = frozenset({"cookies_from_browser"})
 
 _LOCAL_HINTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "169.254.169.254",
                 ".local", ".internal", ".lan", ".home.arpa")
+# 允许的媒体/图片端口：80/443 为主；常见 CDN / 自建备用端口（MISC-02）
+_ALLOWED_PORTS = frozenset({80, 443, 8080, 8443, 8000, 8888, 9000})
 
 
 def allowed_hosts() -> tuple[str, ...]:
@@ -107,11 +118,16 @@ def check_media_url(url: str, *, enforce_allowlist: bool = True) -> tuple[bool, 
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         return False, "链接缺少主机名"
-    if any(host == h or host.endswith(h.lstrip(".")) for h in _LOCAL_HINTS if h.startswith(".")):
-        return False, "禁止解析内网地址"
-    if host in _LOCAL_HINTS or not _ip_is_public(host):
+    # 后缀必须带点边界，避免 endswith("local") 误伤 foo.notlocal.com（MISC-05）
+    for hint in _LOCAL_HINTS:
+        if hint.startswith("."):
+            if host.endswith(hint) or host == hint.lstrip("."):
+                return False, "禁止解析内网地址"
+        elif host == hint:
+            return False, "禁止解析本机 / 内网地址"
+    if not _ip_is_public(host):
         return False, "禁止解析本机 / 内网地址"
-    if parsed.port and parsed.port not in (80, 443):
+    if parsed.port and parsed.port not in _ALLOWED_PORTS:
         return False, "禁止非常规端口"
     if enforce_allowlist and not _host_matches(host, allowed_hosts()):
         return False, f"该站点不在合规白名单内：{host}"
@@ -131,7 +147,7 @@ def check_image_url(url: str) -> tuple[bool, str]:
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host or not _ip_is_public(host):
         return False, "禁止回显本机 / 内网地址"
-    if parsed.port and parsed.port not in (80, 443):
+    if parsed.port and parsed.port not in _ALLOWED_PORTS:
         return False, "禁止非常规端口"
     if not _host_matches(host, IMAGE_CDN_SUFFIXES):
         return False, f"图片域名不在 CDN 白名单内：{host}"
@@ -142,11 +158,18 @@ def check_image_url(url: str) -> tuple[bool, str]:
 
 
 def redact_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """对外回显配置时抹掉凭据，只保留「有没有配」。"""
+    """对外回显配置时抹掉凭据，只保留「有没有配」。
+
+    用精确键名匹配（SEC-02）：``cookies_from_browser`` 是浏览器名而非凭据，
+    必须原样回显，否则前端 ``<select>`` 失配 → 保存时静默清空。
+    """
     out: dict[str, Any] = {}
     for key, value in (cfg or {}).items():
         low = key.lower()
-        if any(word in low for word in SENSITIVE_KEYS):
+        if low in REDACT_EXCLUDE:
+            out[key] = value
+            continue
+        if low in SENSITIVE_KEYS:
             out[key] = "***" if value else ""
             out[f"has_{key}"] = bool(value)
         else:
@@ -170,6 +193,13 @@ def check_request(handler: Any) -> tuple[bool, str]:
     原版只对 POST 校验 Origin、且无 Origin 就放行；这里把 GET 一并纳入，
     并拒绝非本机 Host，堵住 DNS rebinding。设 AVD_TOKEN 后所有 API 都要带
     X-AVD-Token（前端由 flagship.js 从 sessionStorage 读取并附带）。
+
+    威胁模型（D35）：这是**单机本地防护**，不是多用户认证。
+    - 仅回环地址可访问；默认无 Token，同机进程本来就能访问 127.0.0.1。
+    - 无 Origin 的请求放行，因为命令行/脚本不会带 Origin；浏览器跨站请求必带
+      Origin，因此能被同源校验拦住。
+    - Token 用 ``hmac.compare_digest`` 比较，避免时间侧信道。
+    - 若未来开放局域网访问，必须同时启用 Token、Origin 校验与速率限制。
     """
     raw_host = (handler.headers.get("Host") or "").strip()
     host = raw_host.split(":")[0].strip("[]").lower()
@@ -182,6 +212,8 @@ def check_request(handler: Any) -> tuple[bool, str]:
             return False, "请求被拒绝（跨站来源）"
 
     token = (os.environ.get("AVD_TOKEN") or "").strip()
-    if token and handler.headers.get("X-AVD-Token") != token:
-        return False, "需要访问令牌（X-AVD-Token）"
+    if token:
+        presented = handler.headers.get("X-AVD-Token") or ""
+        if not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
+            return False, "需要访问令牌（X-AVD-Token）"
     return True, ""

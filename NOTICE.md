@@ -1,21 +1,26 @@
 # 第三方组件声明 · AVD Flagship v2.0.0
 
 本产品由 Hyht-Team 自主研发的部分，与随包分发的第三方组件，边界如下。
-逐文件归属与行数见 `作者信息`；专有许可见 `LICENSE`。
+专有许可见 `LICENSE`。
 **本文件随发布包一起提供，请勿删除。**
 
 ---
 
 ## 1. 自主研发部分（Copyright © 2026 Hyht-Team）
 
-| 类别 | 内容 | 行数（r3 重算） |
+| 类别 | 内容 | 行数（r6 实测 2026-11-17） |
 |---|---|---|
-| A 原版自研未改动 | UI（app.js / style.css）、`downloader/` 5 个未改模块、`tools/` 2 模块、`app.py` | 5,500 |
-| B 本轮新增 | `fusion/` 融合层（含加固 / 引擎参数 / 诊断）、统一入口、环境自检、离线验收、SBOM、36 项测试、`static/flagship.js`、`yt_dlp_plugins/` | 3,643 |
-| D 原版 + 精确补丁 | `server.py`（19 处补丁）、`static/index.html`（+1 行）、`asr.py` / `polish.py` / `tasks.py`（r3 安全补丁） | 3,339 |
+| A 原版自研未改动 | `downloader/`（`__init__` / `subtitles`）、`requirements.txt`、`setup-asr.bat` | 582 |
+| B Hyht-Team 新增 | `fusion/` 28 模块、`tests/` 11 文件、`static/flagship.js` + `flagship.css` + `i18n.js`、`yt_dlp_plugins/` 3 个、`boot.py` / `doctor.py` / `verify_*` / SBOM 与 CVE 脚本 / `cookies/cookie_doctor.py` 共 13 个 | 19,808 |
+| D 原版 + 精确补丁 | `server.py`、`static/index.html`、`static/app.js`、`static/style.css`、`downloader/`（`asr` / `polish` / `tasks` / `config` / `engine` / `runtime_paths`）、`tools/`（`asr_worker` / `asr_setup`）、`start.command` | 10,181 |
 
-**合计 12,482 行自研源码。** r3 把 `asr.py / polish.py / tasks.py` 从 A 类改归 D 类，
-理由与逐文件明细见 `作者信息`——口径按真实改动状态更正，不做有利化调整。 UI、交互、业务编排、合规话术、文字稿结构化均为自主研发；
+**合计 30,571 行自研源码（4 + 58 + 16 = 78 个文件）。** 判定规则：与首个提交
+`957b362` 逐文件 `git diff` 为空 → A 类；有改动 → D 类；不在该提交内 → B 类。
+r5 相对 r3 的变化：`static/app.js`（+292/−5）、`style.css`（+31/−2）、
+`downloader/config.py`（+107/−3）、`engine.py`（+138/−7）、`tools/asr_worker.py`（+491/−50）
+均已有补丁，按 r3 自己的规则从 A 类改归 D 类 —— 这与 r3 把
+`asr.py / polish.py / tasks.py` 改归 D 类是同一套口径。
+UI、交互、业务编排、合规话术、文字稿结构化均为自主研发；
 使用第三方库不影响本产品作为「自主研发产品」对外表述，但不得宣称
 「全栈自研 / 100% 自研 / 自研语音识别模型 / 无第三方依赖 / 底层解析引擎自研」。
 
@@ -29,30 +34,52 @@
 |---|---|---|---|---|
 | yt-dlp | 2026.10.26 (stable, `c91f8de0`) | **Unlicense**（源码/wheel） | 链接解析与媒体下载 | `vendor/yt_dlp/`，**原样内嵌、未改一行** |
 
-### 2.2 ASR 运行时（按实测导入探针精确裁剪，156.8 MB）
+### 2.2 ASR 运行时（按实测导入探针精确裁剪，176 MB / 23 个包）
+
+> **r5 更正（2026-11-14）**：上一版只列了 8 个包。`faster-whisper 1.2.1` 把下载层从
+> `requests` 换成 `httpx`，实际随包为 **23 个包**（含 `httpx` 及其 `anyio` / `h11` /
+> `httpcore` / `idna` / `certifi` 传递依赖，以及 `safetensors` / `regex` / `filelock` /
+> `fsspec` / `PyYAML` / `typing_extensions` / `requests` / `urllib3` /
+> `charset-normalizer`）。**漏声明即 Apache-2.0 §4 与 MIT 署名义务未履行**，
+> 故本节按 `python3 sca_report.py` 的实测结果重列。
 
 | 包 | 版本 | 许可（取自包内 `*.dist-info/METADATA`） |
 |---|---|---|
+| anyio | 4.16.0 | MIT |
 | av (PyAV) | 19.0.1 | BSD-3-Clause |
+| certifi | 2026.10.23 | MPL-2.0 |
+| charset-normalizer | 3.5.2 | MIT |
 | ctranslate2 | 4.8.2 | MIT |
 | faster-whisper | 1.2.1 | MIT |
+| filelock | 4.2.10 | MIT |
+| fsspec | 2026.9.0 | BSD-3-Clause |
+| h11 | 0.16.0 | MIT |
+| httpcore | 1.0.9 | BSD-3-Clause |
+| httpx | 0.28.1 | BSD-3-Clause |
 | huggingface-hub | 1.33.0 | Apache-2.0 |
+| idna | 3.20 | BSD-3-Clause |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
 | onnxruntime | 1.30.0 | MIT |
-| tokenizers | 0.23.2 | Apache-2.0（按 METADATA 的 License Classifier；包内无独立 LICENSE 文件） |
+| PyYAML | 6.0.3 | MIT |
+| regex | 2026.11.9 | Apache-2.0 AND CNRI-Python |
+| requests | 2.34.2 | Apache-2.0 |
+| safetensors | 0.8.0 | Apache-2.0（按 METADATA 的 License Classifier） |
+| tokenizers | 0.23.2 | Apache-2.0（同上；包内无独立 LICENSE 文件） |
 | tqdm | 4.70.1 | MPL-2.0 AND MIT（双许可） |
+| typing_extensions | 4.16.0 | PSF-2.0 |
+| urllib3 | 2.8.0 | MIT |
 
-> 裁剪依据：`tools/asr_worker.py` 转写自有中文语音时的运行期导入探针，
-> 实测只加载上述 8 个包。`torch`(568M) / `mlx`(211M) / `llvmlite`(125M) /
-> `scipy`(87M) 等未进入发布包。**因此离线包只提供 faster 引擎，MLX 引擎不可用**，
-> 这是有意的工程取舍，不是缺陷。完整来源见 `runtime/MANIFEST.json`。
+> 裁剪依据：`tools/asr_worker.py` 转写自有中文语音时的运行期导入探针。
+> `torch`(568M) / `mlx`(211M) / `llvmlite`(125M) / `scipy`(87M) 等未进入发布包。
+> **因此离线包只提供 faster 引擎，MLX 引擎不可用**，这是有意的工程取舍，不是缺陷。
+> 完整来源见 `runtime/MANIFEST.json`；机器可读清单见 `SCA-供应链清单.md`。
 
 ### 2.3 语音模型权重
 
 | 组件 | 来源 | 许可 | 位置 |
 |---|---|---|---|
-| faster-whisper-large-v3-turbo (CT2) | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **MIT**（模型卡 `license: mit`，2026-11-12 核验） | `models/faster-whisper-large-v3-turbo/`，1.5 GB，**默认档** |
-| faster-whisper-tiny (CT2) | `Systran/faster-whisper-tiny` | **MIT**（模型卡 `license: mit`） | `models/faster-whisper-tiny/`，84 MB，轻量备用档 |
+| faster-whisper-large-v3-turbo (CT2) | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **MIT**（模型卡 `license: mit`，2026-11-12 核验） | `models/faster-whisper-large-v3-turbo/`，~1.5 GiB，**默认档** |
+| faster-whisper-tiny (CT2) | `Systran/faster-whisper-tiny` | **MIT**（模型卡 `license: mit`） | `models/faster-whisper-tiny/`，~75 MiB，轻量备用档 |
 | Whisper large-v3-turbo 官方权重 | `openai/whisper-large-v3-turbo` | **MIT**（模型卡） | turbo 转换版对应的官方发布 |
 | Whisper large-v3 基座 | `openai/whisper-large-v3` | **Apache-2.0**（模型卡，同期核验） | 官方 turbo 的 `base_model` |
 | Whisper tiny 基座 | `openai/whisper-tiny` | **Apache-2.0**（模型卡） | tiny 转换版所基于的上游模型 |
@@ -99,16 +126,21 @@
    中文实测精度明显高于 tiny（「期见版」→「旗舰版」）；
 3. ✅ MIT / Apache-2.0 许可证全文随包 + 来源与变更说明（`LICENSES/`）；
 4. ✅ 模型权重随包预置，断网转写成立（此前首次运行会因 `HfHubHTTPError` 整块失败）；
-5. ✅ ASR 运行时实体化并列出 8 个包各自许可；
-6. ✅ 自研边界：`LICENSE`、`作者信息`、B 类文件版权头、git 基线；
+5. ✅ ASR 运行时实体化并列出 **23 个包**各自许可（r5 更正：上一版只列 8 个）；
+6. ✅ 自研边界：`LICENSE`、版权头、git 基线；
 7. ✅ 平台 Cookie 通道与安全边界（`cookies/README.md`，cookie 文件强制限定包内）；
-8. ✅ 供应链物料清单（SBOM）与 CI 静态检查配置，见 `SCA-供应链清单.md`、`.github/workflows/ci.yml`。
+8. ✅ CI 静态检查与单测门禁，见 `.github/workflows/ci.yml`；
+9. ✅ 在线漏洞核查双源重跑（r5）：OSV 精确版本查询 **24 个组件 0 命中**、
+   历史漏洞 156 条已逐条核验修复点；PyPI Advisory 第二源 **23 个组件 0 条**
+   （附 `requests 2.31.0` 阳性对照命中 6 条，证明链路有效）。
+   见 `CVE-在线扫描报告.md` / `CVE-交叉核验记录.md` / `CVE-PyPI-Advisory核验.md`。
 
 **仍待补齐（本包未代做）**
 
 1. 若捆绑 ffmpeg 静态二进制，按其编译开关确认 LGPL/GPL 义务；
 2. 转换版权重是否同时受基座 Apache-2.0 约束，**请许可书面签字**
    （证据链已备齐、义务已按最保守口径履行，但法律结论不由本包代作）；
-3. 在线 CVE 数据库比对（本包只出离线 SBOM，未联网跑 SCA 扫描器）；
+3. 已做在线 CVE 双源查询，但**未做**源码级漏洞比对、未跑 Trivy / Grype
+   （本机无二进制、GitHub Releases 不可达），不得把「查询无命中」写成「通过安全审计」；
 4. 软件著作权登记、「自主知识产权」认定所需的主管部门材料；
 5. Windows 运行时真机验收（脚本已备，本机 macOS 无法实测）。

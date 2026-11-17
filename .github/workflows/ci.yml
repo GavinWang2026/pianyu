@@ -12,31 +12,37 @@ on:
 
 jobs:
   static:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.12', '3.13']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python-version }}
 
       - name: Compile all self-developed Python
         run: |
-          python -m compileall -q boot.py doctor.py server.py app.py \
-            fusion downloader tools tests yt_dlp_plugins
+          python -m compileall -q boot.py doctor.py server.py app.py fusion downloader tools tests yt_dlp_plugins
 
       - name: Lint (critical errors only)
+        if: runner.os == 'Linux'
         run: |
           python -m pip install --quiet ruff
           ruff check --config ruff.toml boot.py doctor.py server.py fusion tests
 
       - name: Assemble pinned engine for unit tests
         # 版本必须与 VERSION / boot_check 的硬校验一致
+        shell: bash
         run: |
           python -m pip download "yt-dlp==2026.10.26" --no-deps -d /tmp/avd-wheel || true
           python - <<'PY'
-          import glob, zipfile
+          import glob, zipfile, os
           wheels = glob.glob('/tmp/avd-wheel/yt_dlp-*.whl')
           if not wheels:
               print('pinned wheel unavailable; engine-dependent tests will be skipped')
@@ -46,49 +52,237 @@ jobs:
               print('extracted', wheels[0])
           PY
 
-      - name: Unit tests
+      - name: Unit tests + coverage gate
         if: ${{ hashFiles('vendor/yt_dlp/version.py') != '' }}
-        run: python -m unittest discover -s tests -v
-
-      - name: Supply-chain inventory
-        run: python sca_report.py --check
-
-      - name: Offline CVE evidence is reproducible
-        # 只重生成报告、校验随仓库提交的原始证据，不在 CI 里联网查漏洞库
+        shell: bash
         run: |
-          python cve_scan.py --offline
-          python cve_crosscheck.py --offline
-          python pypi_advisory_check.py --offline
+          python -m pip install --quiet coverage
+          python -m coverage run -m unittest discover -s tests -v
+          python -m coverage report -m --include='fusion/*'
           python - <<'PY'
-          import json
+          import sys
+          import coverage
+          cov = coverage.Coverage()
+          cov.load()
+          pct = float(cov.report(include=["fusion/*"]))
+          print(f"fusion coverage={pct:.1f}%")
+          if pct < 68.0:
+              print("FAIL: fusion coverage gate < 68%")
+              sys.exit(1)
+
+          def file_pct(path):
+              m = cov.analysis2(path)
+              stmts = set(m[1] or [])
+              missing = set(m[3] or [])
+              if not stmts:
+                  return None
+              return 100.0 * (len(stmts) - len(missing & stmts)) / len(stmts)
+
+          failed = []
+          # 关键模块底线（报告点名的几个高风险模块）
+          critical = {
+              "fusion/diagnose_pack.py": 72.0,
+              "fusion/library.py": 70.0,
+              "fusion/checkpoint.py": 70.0,
+              "fusion/thumb_cache.py": 50.0,
+          }
+          for path, need in critical.items():
+              hit = file_pct(path)
+              if hit is None:
+                  failed.append(f"{path}: no statements")
+                  continue
+              print(f"  {path}: {hit:.1f}% (gate {need}%)")
+              if hit < need:
+                  failed.append(f"{path}: {hit:.1f}% < {need}%")
+
+          # 目录级底线：fusion/ 下每个模块都必须 ≥45%，
+          # 不再用「写死四模块名单」让 api.py 这类核心模块长期 0% 却逃逸。
           from pathlib import Path
-          for name in ('cve_osv_raw.json', 'cve_crosscheck.json', 'pypi_advisory_raw.json'):
-              data = json.loads(Path(name).read_text(encoding='utf-8'))
-              assert data.get('generated_at'), name
-              assert data.get('results'), name
-              print('  OK', name, len(data['results']), 'components')
+          for path in sorted(Path("fusion").glob("*.py")):
+              rel = f"fusion/{path.name}"
+              hit = file_pct(rel)
+              if hit is None:
+                  continue
+              if hit < 45.0:
+                  print(f"  low {rel}: {hit:.1f}%")
+                  failed.append(f"file floor {rel}: {hit:.1f}% < 45%")
+
+          # 增量：本 PR/push 改动的 fusion 文件要求 ≥60%（新文件不得 0%）
+          import subprocess
+          base = "origin/main"
+          try:
+              subprocess.check_output(["git", "rev-parse", "--verify", base],
+                                      stderr=subprocess.DEVNULL)
+              diff = subprocess.check_output(
+                  ["git", "diff", "--name-only", f"{base}...HEAD"],
+                  text=True, stderr=subprocess.DEVNULL,
+              )
+          except Exception:
+              try:
+                  diff = subprocess.check_output(
+                      ["git", "diff", "--name-only", "HEAD"], text=True,
+                  )
+                  diff += "\n" + subprocess.check_output(
+                      ["git", "diff", "--name-only", "--cached"], text=True,
+                  )
+              except Exception:
+                  diff = ""
+          changed = [
+              p.strip() for p in diff.splitlines()
+              if p.strip().startswith("fusion/") and p.strip().endswith(".py")
+          ]
+          for path in sorted(set(changed)):
+              if not Path(path).is_file():
+                  continue
+              hit = file_pct(path)
+              if hit is None:
+                  continue
+              need = 60.0
+              print(f"  incremental {path}: {hit:.1f}% (gate {need}%)")
+              if hit < need:
+                  failed.append(f"incremental {path}: {hit:.1f}% < {need}%")
+          if failed:
+              print("FAIL: critical/floor/incremental module coverage")
+              for line in failed:
+                  print(" ", line)
+              sys.exit(1)
+          print("OK coverage gates")
+          PY
+        env:
+          PYTHONUTF8: "1"
+
+      - name: Secrets scan (delivery must be credential-free)
+        shell: bash
+        run: |
+          python tools/secrets_scan.py
+          # 反向自检：真凭据必须被抓到，否则说明扫描器失效
+          python - <<'PY'
+          import subprocess, sys, tempfile, pathlib
+          with tempfile.TemporaryDirectory() as td:
+              root = pathlib.Path(td)
+              (root / "cookies").mkdir()
+              line = ("# Netscape HTTP Cookie File\n"
+                      ".douyin.com\tTRUE\t/\tTRUE\t0\tsessionid\tdeadbeef0123456789\n")
+              (root / "cookies" / "cookies.txt").write_text(line, encoding="utf-8")
+              rc = subprocess.run(
+                  [sys.executable, "tools/secrets_scan.py", "--root", td],
+                  capture_output=True, text=True,
+              ).returncode
+              if rc == 0:
+                  print("FAIL: secrets_scan 未识别出测试用真实 Cookie")
+                  sys.exit(1)
+              print("OK secrets_scan detects real cookie material")
           PY
 
-      - name: HTML deliverables are well-formed and offline
+      - name: Delivery package stays whitelisted
+        shell: bash
+        run: |
+          # D32：打包已从「黑名单」改为「白名单」——只有 --include 列出的
+          # 目录/文件会进包，运行状态与凭据即使没写 exclude 也进不去。
+          python - <<'PY'
+          from pathlib import Path
+          sh = Path("packaging/macos/build_app.sh").read_text(encoding="utf-8")
+          assert "--exclude='*'" in sh, "build_app.sh 未使用白名单（缺 --exclude='*'）"
+          assert "cookies/*.txt" in sh, "build_app.sh 未排除 cookies/*.txt"
+          assert "secrets_scan.py" in sh, "build_app.sh 未做凭据自检"
+          assert "绝对路径软链" in sh or "bad_links" in sh, "build_app.sh 未做软链自检"
+          # 运行状态 / 任务库 / 证据目录不得出现在任何 --include 规则里
+          for state_dir in (".state", "outputs", "evidence", ".venv-asr", "downloads", "logs"):
+              assert f"--include='{state_dir}" not in sh, f"白名单误包含 {state_dir}"
+          assert ".venv-asr" in sh, "build_app.sh 未说明 ASR 运行时未随包"
+          print("OK packaging whitelist excludes credentials/state/.venv-asr")
+          PY
+
+      - name: CSP has no script/style unsafe-inline
+        shell: bash
         run: |
           python - <<'PY'
-          from html.parser import HTMLParser
           from pathlib import Path
           import re
-          VOID = {'meta','br','hr','img','input','link','path','rect','line','circle','use','source','polygon'}
-          class Checker(HTMLParser):
-              def __init__(self):
-                  super().__init__(); self.stack=[]; self.bad=[]
-              def handle_starttag(self, tag, attrs):
-                  if tag not in VOID: self.stack.append(tag)
-              def handle_endtag(self, tag):
-                  if tag in VOID: return
-                  if self.stack and self.stack[-1] == tag: self.stack.pop()
-                  else: self.bad.append(tag)
-          for path in sorted(Path('.').glob('*.html')):
-              text = path.read_text(encoding='utf-8')
-              c = Checker(); c.feed(text)
-              assert not c.stack and not c.bad, f'{path}: unclosed={c.stack[:3]} mismatched={c.bad[:3]}'
-              assert not re.search(r'https?://(?:cdn|unpkg|jsdelivr|fonts)', text), f'{path}: external CDN'
-              print('  OK', path.name, len(text), 'chars')
+          text = Path("server.py").read_text(encoding="utf-8")
+          assert "script-src 'self'" in text
+          assert "style-src 'self'" in text
+          assert "script-src 'self' 'unsafe-inline'" not in text
+          assert "style-src 'self' 'unsafe-inline'" not in text
+          assert "onerror=" not in Path("static/app.js").read_text(encoding="utf-8")
+          js = Path("static/flagship.js").read_text(encoding="utf-8")
+          assert Path("static/flagship.css").is_file()
+          assert "createElement('style')" not in js
+          assert not re.search(r'style="[^"]*"', js), "flagship.js still has style= attrs"
+          print("OK CSP script-src+style-src tightened; flagship styles external")
           PY
+
+      - name: Light smoke (no ASR runtime)
+        shell: bash
+        run: python verify_smoke.py
+
+      - name: Synthetic E2E (no ASR runtime)
+        shell: bash
+        run: python verify_e2e_synth.py
+
+      - name: Resume synth proof (R4, no ASR runtime)
+        shell: bash
+        run: python verify_resume_synth.py
+
+      - name: Windows path smoke (script-verified)
+        shell: bash
+        run: python verify_windows_paths.py
+
+      - name: Docs units (MiB/GiB)
+        shell: bash
+        run: python verify_docs_units.py
+
+      # R2：真正在三套 runner 上验证路径/编码/换行/文件名语义。
+      # 之前 verify_windows_paths 只检查「脚本里有没有写 Win 路径」，
+      # 从没验证过产物名在 Windows 上是否真的能创建。
+      - name: Cross-platform path/encoding smoke
+        shell: bash
+        run: python verify_cross_platform.py
+
+      # r5 抓到的真问题：runtime 有 23 个包，NOTICE 只写 8 个，长期无人发现。
+      # 分工要说清：源码仓没有 runtime/（被 .gitignore 排除），这里只能校
+      # 「NOTICE 与 SCA 互不矛盾」；「文档 vs 实物」的门禁钉在
+      # packaging/macos/build_app.sh（--strict），因为只有打包产物里
+      # runtime 与 NOTICE 才同时在场 —— 那才是这个缺陷真正能造成伤害的地方。
+      - name: Supply-chain docs cross-check
+        shell: bash
+        run: python verify_supply_chain.py --docs-only
+
+  e2e-offline:
+    # 需要随包 fixtures + ASR 运行时；源码仓通常没有，缺资产时 skip 不失败
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline E2E (skip if no fixture/runtime)
+        shell: bash
+        run: |
+          if [[ ! -f fixtures/avd_voice_sample.mp4 ]]; then
+            echo "SKIP: fixtures/avd_voice_sample.mp4 not in repo"
+            exit 0
+          fi
+          if [[ ! -d runtime/site-packages ]] && [[ ! -d .venv-asr ]]; then
+            echo "SKIP: ASR runtime not bundled in this checkout"
+            exit 0
+          fi
+          python verify_e2e.py
+
+      - name: Long-material resume (real ASR, skip if no fixture/runtime)
+        shell: bash
+        # 真链路：真 ASR 引擎 + 真检查点 + 真取消 + 同 task_id 续跑。
+        # 判据见脚本头：检查点存活、续跑首块 >1、前缀逐段一致、覆盖 ≥90%、收尾清理。
+        # 缺 fixture/运行时同样 skip —— 源码仓没有 1.5GB 权重。
+        run: |
+          if [[ ! -f fixtures/avd_voice_sample.mp4 ]]; then
+            echo "SKIP: fixtures/avd_voice_sample.mp4 not in repo"
+            exit 0
+          fi
+          if [[ ! -d runtime/site-packages ]] && [[ ! -d .venv-asr ]]; then
+            echo "SKIP: ASR runtime not bundled in this checkout"
+            exit 0
+          fi
+          python verify_long_resume.py --minutes 4

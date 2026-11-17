@@ -10,14 +10,16 @@
 「主服务用了系统 ffmpeg、worker 却在找包里 ffmpeg」这种撕裂。因此集中到这里，
 其它模块只准问本模块，不准自己拼 ``runtime/`` 路径。
 
-目录布局::
+当前实际布局（以本仓库交付为准，D17）::
 
     runtime/
-      python/            便携 CPython 解释器（python-build-standalone）
-      ffmpeg/bin/        ffmpeg + ffprobe 静态二进制
-      pkgs/              主服务依赖（yt-dlp 及其依赖）
-      pkgs-asr/          识别引擎依赖（mlx / faster-whisper 等）
-      sitecustomize.py   按 VD_PKG_DIR 注入依赖目录
+      site-packages/     ASR / 推理依赖（随包实体文件）
+      MANIFEST.json      组件清单
+      python/            （可选）便携 CPython —— find_portable_python()
+      ffmpeg/bin/        （可选）静态 ffmpeg —— find_ffmpeg()
+
+历史规划中的 ``pkgs/`` / ``pkgs-asr/`` 目录**尚未落地**；相关辅助函数已删除，
+避免文档地图与实物漂移。需要分层依赖时再恢复并同步本模块文档。
 
 查找顺序（改写时务必保持这个次序）::
 
@@ -25,8 +27,8 @@
     2. 包内 runtime/  便携包的正常路径
     3. 系统 PATH      开发者机器上的 brew / 系统安装
 
-开发态（在本仓库直接跑）没有 ``runtime/``，自然落到第 2 步之后的 PATH；
-打包态则相反，第 1、2 步先命中，**完全不碰用户系统**，两个环境互不干扰。
+开发态（在本仓库直接跑）没有 ``runtime/python`` 时落到 PATH；
+打包态则第 1、2 步先命中，**完全不碰用户系统**。
 """
 
 from __future__ import annotations
@@ -43,11 +45,6 @@ RUNTIME_DIR_NAME = "runtime"
 
 _ENV_RUNTIME = "VD_RUNTIME"
 _ENV_FFMPEG = "VD_FFMPEG"
-
-# 依赖目录（便携包里是纯目录，不建 venv —— 见 tools/build_portable.py 的说明）
-PKGS_DIR_NAME = "pkgs"
-ASR_PKGS_DIR_NAME = "pkgs-asr"
-
 
 # ---------------------------------------------------------------------------
 # 目录
@@ -67,19 +64,13 @@ def runtime_dir() -> Path:
 
 
 def has_runtime() -> bool:
-    """便携运行时是否已装配完毕。"""
+    """便携运行时是否已装配：site-packages 实体，或可选 python/ffmpeg 目录。"""
     root = runtime_dir()
-    return (root / "python").is_dir() or (root / "ffmpeg").is_dir()
-
-
-def packages_dir() -> Path:
-    """主服务依赖目录。"""
-    return runtime_dir() / PKGS_DIR_NAME
-
-
-def asr_packages_dir() -> Path:
-    """识别引擎依赖目录。"""
-    return runtime_dir() / ASR_PKGS_DIR_NAME
+    return (
+        (root / "site-packages").is_dir()
+        or (root / "python").is_dir()
+        or (root / "ffmpeg").is_dir()
+    )
 
 
 # ---------------------------------------------------------------------------

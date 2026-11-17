@@ -30,7 +30,8 @@ stdin  一个 JSON 对象：
       "model":    "",                          # 留空则按引擎取默认模型
       "work_dir": "/tmp/vd-asr-xxxx",
       "chunk_seconds": 300,
-      "initial_percent": 15.0                  # 转写阶段在总进度里的起点
+      "initial_percent": 15.0,                 # 转写阶段在总进度里的起点
+      "hotwords": ["专有名词", "术语"]         # 可选，拼进 initial_prompt
     }
 
 stdout 逐行 JSON 事件：
@@ -52,9 +53,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import wave
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# 主包路径
+# ---------------------------------------------------------------------------
+# worker 跑在 ``.venv-asr`` 里，脚本目录是 ``tools/``，主包根**不在** sys.path 上；
+# 启动它的进程池还会主动 ``env.pop("PYTHONPATH")`` 以保持依赖隔离。
+# 但检查点与取消哨兵依赖 ``fusion.checkpoint`` / ``fusion.recovery``
+# （两者只用标准库，引进来不会污染 ASR 环境）。少了下面这三行，
+# 所有 ``from fusion import checkpoint`` 都会 ImportError，而调用点全包在
+# ``try/except: pass`` 里 —— 表现就是「取消能取消，但永远续不上跑」，
+# 且日志里一句话都看不到。R2 真机验证就是这么被抓出来的。
+_APP_ROOT = Path(__file__).resolve().parent.parent
+if str(_APP_ROOT) not in sys.path:
+    sys.path.append(str(_APP_ROOT))
+
+_CKPT_ERROR = ""
+_CKPT_PROBED = False
 
 # 各引擎的默认模型。mlx 用 MLX 量化版，faster 用 CTranslate2 版。
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
@@ -87,11 +107,17 @@ _RE_SILENCE_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 # 事件输出
 # ---------------------------------------------------------------------------
 
+# 事件写入锁：模型加载心跳线程与主线程会同时写 stdout，不加锁会把一行 JSON
+# 从中间劈开，父进程读到半行就整条丢掉（表现为「进度突然不动」）。
+_EMIT_LOCK = threading.Lock()
+
+
 def emit(event: dict) -> None:
     """向主服务推送一条事件。每行一个 JSON，必须 flush。"""
     try:
-        sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        with _EMIT_LOCK:
+            sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
     except (BrokenPipeError, OSError):
         # 主服务已断开（用户取消），直接退出
         raise SystemExit(0)
@@ -99,6 +125,74 @@ def emit(event: dict) -> None:
 
 def log(message: str) -> None:
     emit({"type": "stage", "stage": "log", "message": message})
+
+
+def _ckpt_probe() -> bool:
+    """探一次检查点模块是否可用；不可用就明说，不要静默降级。
+
+    "静默" 是这套机制过去最大的坑：``from fusion import checkpoint`` 失败
+    被 ``except Exception: pass`` 吃掉，于是既不落盘、也读不到取消哨兵，
+    而 UI 上「已取消」显示得好好的。这里把失败变成一条可见的日志。
+    """
+    global _CKPT_ERROR, _CKPT_PROBED
+    if not _CKPT_PROBED:
+        _CKPT_PROBED = True
+        try:
+            import importlib
+
+            importlib.import_module("fusion.checkpoint")
+        except Exception as exc:  # noqa: BLE001
+            _CKPT_ERROR = f"{type(exc).__name__}: {exc}"
+    if _CKPT_ERROR:
+        log(f"检查点模块不可用（{_CKPT_ERROR}）：本次不会落盘，取消后也无法续跑")
+        return False
+    return True
+
+
+class _LoadHeartbeat:
+    """模型加载期间的心跳。
+
+    large-v3-turbo 冷加载实测 78.8s，慢盘/低配机可能破百秒。这段时间 worker
+    一行事件都不发，父进程的 120s 心跳看门狗会判定「卡死」并把进程杀掉 ——
+    明明在正常加载却报故障。这里在加载期间每 8s 补一条 ``stage=log`` 事件：
+    看门狗被喂饱，UI 也能看到「正在加载语音模型…」，不再长时间黑屏。
+
+    ``stage=log`` 是刻意选的 —— 父进程对它的处理是「只播日志、不动阶段」，
+    不会污染 ASR 状态机。
+    """
+
+    INTERVAL = 8.0
+
+    def __init__(self, label: str = "正在加载语音模型") -> None:
+        self.label = label
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started_at = 0.0
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.INTERVAL):
+            waited = int(time.time() - self._started_at)
+            emit({
+                "type": "stage",
+                "stage": "log",
+                "message": f"{self.label}…（已等 {waited}s，首次加载较慢）",
+                "loading": True,
+                "loading_seconds": waited,
+            })
+
+    def __enter__(self) -> "_LoadHeartbeat":
+        self._started_at = time.time()
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="asr-load-heartbeat")
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
 
 
 # ---------------------------------------------------------------------------
@@ -139,18 +233,38 @@ def _ffmpeg() -> str:
     return exe
 
 
-def normalize_audio(src: Path, dst: Path) -> None:
-    """把任意音视频归一化为 16kHz 单声道 PCM wav —— whisper 的标准输入。"""
+def _parse_silence_starts(stderr: str) -> list[float]:
+    points: list[float] = []
+    for line in (stderr or "").splitlines():
+        match = _RE_SILENCE_START.search(line)
+        if match:
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                continue
+            if value > 0:
+                points.append(value)
+    return points
+
+
+def normalize_audio(src: Path, dst: Path) -> list[float]:
+    """归一化为 16kHz 单声道 PCM，并在同一次 ffmpeg 里做 silencedetect。
+
+    返回静音起点列表（秒）。失败时抛 RuntimeError。
+    """
     cmd = [
-        _ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+        _ffmpeg(), "-hide_banner", "-nostats", "-y",
         "-i", str(src),
-        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+        "-vn", "-ac", "1", "-ar", "16000",
+        "-af", "silencedetect=n=-35dB:d=0.35",
+        "-c:a", "pcm_s16le",
         str(dst),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0 or not dst.exists():
         detail = (proc.stderr or "").strip().splitlines()
         raise RuntimeError(f"音轨提取失败：{detail[-1] if detail else '未知原因'}")
+    return _parse_silence_starts(proc.stderr or "")
 
 
 def read_pcm16(path: Path):
@@ -177,7 +291,7 @@ def wav_duration(path: Path) -> float:
 
 
 def detect_silences(path: Path) -> list[float]:
-    """用 ffmpeg silencedetect 找出静音起点，作为候选分块边界。"""
+    """单独扫静音（兼容旧调用）；优先走 normalize_audio 一次完成。"""
     cmd = [
         _ffmpeg(), "-hide_banner", "-nostats",
         "-i", str(path),
@@ -185,21 +299,30 @@ def detect_silences(path: Path) -> list[float]:
         "-f", "null", "-",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    points: list[float] = []
-    for line in (proc.stderr or "").splitlines():
-        match = _RE_SILENCE_START.search(line)
-        if match:
-            try:
-                value = float(match.group(1))
-            except ValueError:
-                continue
-            if value > 0:
-                points.append(value)
-    return points
+    return _parse_silence_starts(proc.stderr or "")
+
+
+def adaptive_chunk_seconds(duration: float, configured: float) -> float:
+    """进度粒度切块。
+
+    * 显式 ``chunk_seconds`` > 0：尊重配置；
+    * ≤10 分钟短素材：默认 60–90s（保证多块，取消后检查点可续）；
+    * 更长素材：约 10% 时长，上限 300s。
+    """
+    cfg = float(configured or 0)
+    if duration <= 0:
+        return cfg if cfg > 0 else 90.0
+    if cfg > 0:
+        return max(15.0, min(cfg, max(duration / 10.0, 15.0)))
+    if duration <= 600.0:
+        # 短素材：夹在 60–90，避免整段单块导致续跑收益为 0
+        return max(60.0, min(90.0, max(duration / 5.0, 60.0)))
+    return max(15.0, min(300.0, duration / 10.0))
 
 
 def plan_chunks(duration: float, silences: list[float], target: float) -> list[tuple[float, float]]:
     """把音频切成分块区间，切点尽量落在静音处，避免截断句子。"""
+    target = adaptive_chunk_seconds(duration, target)
     if duration <= target * 1.2:
         return [(0.0, duration)]
 
@@ -337,17 +460,29 @@ class FasterEngine(BaseEngine):
             vad_filter=True,                    # 丢掉静音段，减少幻觉
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
+            word_timestamps=True,               # 词级时间戳（JSON 导出可用）
         )
-        return [
-            {
+        out = []
+        for seg in segments:
+            words = []
+            for w in getattr(seg, "words", None) or []:
+                try:
+                    words.append({
+                        "start": round(float(w.start), 2),
+                        "end": round(float(w.end), 2),
+                        "word": str(getattr(w, "word", "") or "").strip(),
+                    })
+                except Exception:
+                    continue
+            out.append({
                 "start": seg.start,
                 "end": seg.end,
                 "text": seg.text,
                 "no_speech_prob": getattr(seg, "no_speech_prob", 0.0),
                 "avg_logprob": getattr(seg, "avg_logprob", 0.0),
-            }
-            for seg in segments
-        ]
+                "words": words,
+            })
+        return out
 
 
 ENGINES: dict[str, type[BaseEngine]] = {"mlx": MlxEngine, "faster": FasterEngine}
@@ -493,45 +628,54 @@ def configure_hf_cache(model: str) -> None:
         os.environ["HF_HUB_OFFLINE"] = "1"
 
 
-def transcribe(cfg: dict) -> None:
+def transcribe(cfg: dict, *, keep_engine: bool = False) -> None:
+    """统一转写主循环。
+
+    ``keep_engine=True`` 时走常驻池缓存引擎且不 release（serve 模式）；
+    否则一次性加载并在结束时 release。两种模式都写检查点、都响应软取消。
+    """
     source = Path(cfg["source"]).expanduser()
     if not source.exists():
         raise RuntimeError("待转写的媒体文件不存在")
 
-    work_dir = Path(cfg.get("work_dir") or tempfile.mkdtemp(prefix="vd-asr-"))
-    work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir_path = Path(cfg.get("work_dir") or tempfile.mkdtemp(prefix="vd-asr-"))
+    work_dir_path.mkdir(parents=True, exist_ok=True)
+    work_dir = str(work_dir_path)
 
     language = str(cfg.get("language") or "zh").strip()
     engine_pref = str(cfg.get("engine") or "auto").strip().lower()
-    chunk_seconds = float(cfg.get("chunk_seconds") or 300)
+    chunk_seconds = float(cfg.get("chunk_seconds") or 0)
     base_percent = float(cfg.get("initial_percent") or 15.0)
     explicit_model = str(cfg.get("model") or "").strip()
+    task_id = str(cfg.get("task_id") or "")
+    if task_id:
+        _ckpt_probe()
 
-    # ---- 1. 归一化音频 ----
     emit({"type": "stage", "stage": "decode", "message": "正在提取音轨…"})
-    wav_path = work_dir / "audio16k.wav"
-    normalize_audio(source, wav_path)
-
+    wav_path = work_dir_path / "audio16k.wav"
+    silences = normalize_audio(source, wav_path)
     duration = wav_duration(wav_path)
     if duration <= 0.2:
         raise RuntimeError("音频为空或时长过短，无法识别")
 
-    # ---- 2. 规划分块 ----
-    # 静音探测必须在归一化后的 wav 上做：它已是 16k 单声道 PCM，
-    # 扫一遍代价极低；若拿原始视频去扫，等于把整段视频再解一遍。
     emit({"type": "stage", "stage": "segment", "message": "正在分析语音段落…"})
-    silences = detect_silences(wav_path)
     chunks = plan_chunks(duration, silences, chunk_seconds)
-
     samples, sample_rate = read_pcm16(wav_path)
-    wav_path.unlink(missing_ok=True)          # 已进内存，临时文件即刻回收
+    wav_path.unlink(missing_ok=True)
 
-    # ---- 3. 选择引擎 ----
     if explicit_model:
         os.environ["VD_ASR_MLX_MODEL"] = explicit_model
         os.environ["VD_ASR_FASTER_MODEL"] = explicit_model
 
-    engine, notes = select_engine(engine_pref, language)
+    # 加载引擎（首次要 30–90s）。期间发心跳，避免父进程 120s 看门狗把
+    # 「正在加载」误判成「卡死」；模型已在常驻池里时几乎瞬间返回。
+    with _LoadHeartbeat() as _hb:
+        if keep_engine:
+            engine = _engine_for_job(cfg)
+            notes: list[str] = []
+        else:
+            engine, notes = select_engine(engine_pref, language)
+        load_secs = round(time.time() - _hb._started_at, 1)
     for note in notes:
         log(note)
     emit({
@@ -541,6 +685,8 @@ def transcribe(cfg: dict) -> None:
         "engine": engine.name,
         "engine_label": engine.label,
         "model": engine.model,
+        "cached": bool(keep_engine),
+        "load_seconds": load_secs,
     })
 
     if language == "auto":
@@ -548,22 +694,110 @@ def transcribe(cfg: dict) -> None:
     else:
         emit({"type": "stage", "stage": "transcribe", "message": "正在识别语音…"})
 
-    # 中文才需要简体偏置；其它语言喂中文提示词反而会干扰
-    prompt = ZH_PROMPT if language == "zh" else None
+    hotwords: list[str] = []
+    raw_hw = cfg.get("hotwords")
+    if isinstance(raw_hw, list):
+        hotwords = [str(w).strip() for w in raw_hw if str(w).strip()]
+    elif isinstance(raw_hw, str) and raw_hw.strip():
+        for part in re.split(r"[,，;\n\r\t]+", raw_hw):
+            w = part.strip()
+            if w and w not in hotwords:
+                hotwords.append(w)
+    hotwords = hotwords[:200]
+    if language == "zh":
+        prompt = ZH_PROMPT
+        if hotwords:
+            prompt = prompt + " 专有名词：" + "、".join(hotwords) + "。"
+    elif hotwords:
+        prompt = "Proper nouns / glossary: " + ", ".join(hotwords) + "."
+    else:
+        prompt = None
     to_simplified = _simplifier() if language in ("zh", "auto") else None
 
     segments: list[dict] = []
     span = max(0.0, 100.0 - base_percent)
+    tick_sec = max(5.0, duration / 10.0)
+    last_tick_at = -tick_sec
+    start_chunk = 0
+    # 续跑点（秒）：不按「chunk 下标」硬对齐，而按「已转写到第几秒」。
+    # 只按 chunk 对齐会漏掉两种情况：① 用户在第 0 块中途取消 → 无检查点、
+    # 续跑从头来；② 检查点里存的是半块 → 按下标续会跳过该块后半段，直接丢内容。
+    resume_at = 0.0
+    last_ckpt_sec = 0.0
+    # 持久检查点目录：优先 ckpt_dir（流水线 outputs/{task}），避免临时 work_dir 被清理
+    try:
+        from fusion import checkpoint as _ckpt
+        ckpt_dir = str(_ckpt.resolve_ckpt_dir(cfg))
+    except Exception:
+        ckpt_dir = work_dir
+    try:
+        from fusion import checkpoint as _ckpt
+        prev = _ckpt.load_checkpoint(ckpt_dir, task_id) if task_id else None
+        if prev:
+            segments = list(prev.get("segments") or [])
+            resume_at = max(
+                [0.0] + [float(s.get("end") or 0) for s in segments])
+            start_chunk = int(prev.get("chunk_index") or 0) + 1
+            for seg in segments:
+                emit({"type": "segment", "segment": seg})
+            emit({
+                "type": "info",
+                "message": (f"从检查点续跑：已转写到 {resume_at:.0f}s"
+                            f"（chunk {start_chunk}/{len(chunks)}）"),
+                "resume_chunk": start_chunk,
+                "resume_at": round(resume_at, 2),
+            })
+    except Exception:
+        start_chunk = 0
+        resume_at = 0.0
+
+    def _save_ckpt(index: int) -> None:
+        """落盘检查点；没有新内容就不写（避免空转 I/O）。"""
+        global _CKPT_ERROR
+        if not task_id or not segments:
+            return
+        try:
+            from fusion import checkpoint as _ckpt
+            _ckpt.save_checkpoint(
+                ckpt_dir,
+                task_id=task_id,
+                chunk_index=max(0, index),
+                chunks_total=len(chunks),
+                segments=segments,
+                duration=duration,
+                source=str(cfg.get("source") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not _CKPT_ERROR:
+                _CKPT_ERROR = f"{type(exc).__name__}: {exc}"
+                log(f"检查点写入失败（{_CKPT_ERROR}）：取消/崩溃后无法续跑")
 
     try:
         for index, (start, end) in enumerate(chunks):
+            if end <= resume_at + 0.05:
+                continue  # 这一块整块已经转写过
+            if start < resume_at:
+                start = resume_at  # 跨界的块：只转剩余部分
+            try:
+                from fusion import checkpoint as _ckpt
+                if task_id and _ckpt.is_cancel_requested(ckpt_dir, task_id):
+                    # 关键：取消前先把已转写内容落盘，否则「取消可续跑」是空话
+                    _save_ckpt(index - 1 if index > 0 else 0)
+                    emit({
+                        "type": "cancelled",
+                        "message": f"用户取消，已保存至 chunk {index}/{len(chunks)}",
+                        "chunk": index,
+                        "chunks": len(chunks),
+                        "resume_chunk": index,
+                    })
+                    return
+            except Exception:
+                pass
             lo = max(0, int(start * sample_rate))
             hi = min(len(samples), int(end * sample_rate))
-            # 只把当前分块转成 float32：整段一起转会白白多吃一倍内存
             piece = samples[lo:hi].astype("float32") / 32768.0
             if piece.size == 0:
                 continue
-
             for item in engine.transcribe(piece, prompt):
                 text = item["text"]
                 if to_simplified is not None:
@@ -572,18 +806,76 @@ def transcribe(cfg: dict) -> None:
                     "start": round(item["start"] + start, 2),
                     "end": round(item["end"] + start, 2),
                     "text": text,
+                    "raw_text": text,
                 }
+                raw_words = item.get("words") or []
+                if raw_words:
+                    words = []
+                    for w in raw_words:
+                        wt = str(w.get("word") or "").strip()
+                        if to_simplified is not None and wt:
+                            wt = to_simplified(wt)
+                        if not wt:
+                            continue
+                        words.append({
+                            "start": round(float(w.get("start") or 0) + start, 2),
+                            "end": round(float(w.get("end") or 0) + start, 2),
+                            "word": wt,
+                        })
+                    if words:
+                        record["words"] = words
                 segments.append(record)
                 emit({"type": "segment", "segment": record})
-
-            done_ratio = (index + 1) / len(chunks)
+                cursor = float(record["end"])
+                if cursor - last_tick_at >= tick_sec or cursor >= duration - 0.5:
+                    ratio = min(1.0, cursor / duration) if duration > 0 else 0.0
+                    emit({
+                        "type": "progress",
+                        "percent": round(base_percent + span * ratio, 2),
+                        "message": f"转写中 {index + 1}/{len(chunks)} · {int(ratio * 100)}%",
+                    })
+                    last_tick_at = cursor
+                    # 块内也落盘：一块最长 300s，只在块末保存意味着崩溃丢 5 分钟
+                    if cursor - last_ckpt_sec >= 15.0:
+                        last_ckpt_sec = cursor
+                        _save_ckpt(index)
+            done_ratio = (index + 1) / max(1, len(chunks))
             emit({
                 "type": "progress",
                 "percent": round(base_percent + span * done_ratio, 2),
                 "message": f"转写中 {index + 1}/{len(chunks)}",
+                "chunk": index + 1,
+                "chunks": len(chunks),
             })
+            # 块末落盘；没有分段就不写 —— 空检查点会让人以为「可续跑」，
+            # 点进去却什么都没有。
+            _save_ckpt(index)
+        if task_id:
+            try:
+                from fusion import checkpoint as _ckpt
+                _ckpt.clear_checkpoint(ckpt_dir, task_id)
+                from fusion import recovery as _rec
+                _rec.clear_crash_scene(ckpt_dir, task_id)
+            except Exception:
+                pass
+    except Exception as exc:
+        # 崩溃现场：保留检查点并写入 crash json，供诊断包 / 续跑扫描
+        if task_id:
+            try:
+                from fusion import recovery as _rec
+                _rec.save_crash_scene(
+                    ckpt_dir, task_id=task_id, reason="asr_worker exception", exc=exc,
+                    extra={"chunks": len(chunks), "start_chunk": start_chunk},
+                )
+            except Exception:
+                pass
+        raise
     finally:
-        engine.release()
+        if not keep_engine:
+            try:
+                engine.release()
+            except Exception:
+                pass
 
     text = "".join(item["text"] for item in segments).strip()
     emit({
@@ -592,10 +884,151 @@ def transcribe(cfg: dict) -> None:
         "duration": round(duration, 2),
         "segment_count": len(segments),
         "engine": engine.name,
+        "no_speech": len(segments) == 0,
+        "filtered_segments": 0,
+        "resume_chunk": start_chunk,
     })
 
 
+def _cleanup_work_dir(cfg: dict) -> None:
+    work_dir = cfg.get("work_dir")
+    if work_dir:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# 常驻模式：跨任务复用已加载的引擎（同 engine+language+model）
+_CACHED_ENGINE: Optional[BaseEngine] = None
+_CACHED_KEY: tuple[str, str, str] = ("", "", "")
+
+
+def _engine_for_job(cfg: dict) -> BaseEngine:
+    """取或创建引擎；命中缓存则跳过 1.5GB 重载。"""
+    global _CACHED_ENGINE, _CACHED_KEY
+    language = str(cfg.get("language") or "zh").strip()
+    engine_pref = str(cfg.get("engine") or "auto").strip().lower()
+    explicit_model = str(cfg.get("model") or "").strip()
+    if explicit_model:
+        os.environ["VD_ASR_MLX_MODEL"] = explicit_model
+        os.environ["VD_ASR_FASTER_MODEL"] = explicit_model
+    # 先按偏好推算缓存键，命中则不重载
+    if _CACHED_ENGINE is not None and _CACHED_ENGINE._handle is not None:
+        pref = engine_pref if engine_pref not in ("", "auto", None) else _CACHED_ENGINE.name
+        if (
+            _CACHED_KEY[1] == language
+            and (_CACHED_KEY[0] == pref or engine_pref in ("", "auto", None))
+        ):
+            log(f"复用已加载引擎：{_CACHED_ENGINE.label}")
+            return _CACHED_ENGINE
+    if _CACHED_ENGINE is not None:
+        try:
+            _CACHED_ENGINE.release()
+        except Exception:
+            pass
+        _CACHED_ENGINE = None
+    engine, notes = select_engine(engine_pref, language)  # 内部已 prepare
+    for note in notes:
+        log(note)
+    _CACHED_ENGINE = engine
+    _CACHED_KEY = (engine.name, language, engine.model)
+    return engine
+
+
+def transcribe_cached(cfg: dict) -> None:
+    """常驻模式转写：引擎不在 finally 里 release（兼容旧调用）。"""
+    transcribe(cfg, keep_engine=True)
+
+
+def serve() -> int:
+    """常驻进程：每行一个 JSON 任务；引擎跨任务复用。
+
+    协议：
+      stdin  ``{"cmd":"job", ...}`` / ``{"cmd":"cancel","task_id":...}`` / ``{"cmd":"shutdown"}``
+      stdout 同单次模式事件；任务结束后再发 ``{"type":"job_end"}``
+      取消：主进程也可写 ``work_dir/.asr-cancel-{task_id}``，worker 在 chunk 边界退出并保留检查点。
+    """
+    emit({"type": "ready", "mode": "serve"})
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            emit({"type": "error", "message": "worker 参数解析失败"})
+            emit({"type": "job_end", "ok": False})
+            continue
+        cmd = str(msg.get("cmd") or "job").strip().lower()
+        if cmd == "shutdown":
+            emit({"type": "bye"})
+            break
+        if cmd == "cancel":
+            # 协议级 cancel：写哨兵（优先持久 ckpt_dir）
+            tid = str(msg.get("task_id") or "")
+            try:
+                from fusion import checkpoint as _ckpt
+                wd = str(_ckpt.resolve_ckpt_dir(msg))
+                if tid:
+                    _ckpt.request_soft_cancel(wd, tid)
+            except Exception:
+                pass
+            emit({"type": "info", "message": "已请求取消（chunk 边界生效）"})
+            continue
+        cfg = dict(msg)
+        cfg.pop("cmd", None)
+        # 新任务开始时清掉旧取消哨兵（保留未完成检查点，供续跑）
+        try:
+            from fusion import checkpoint as _ckpt
+            tid0 = str(cfg.get("task_id") or "")
+            wd0 = str(_ckpt.resolve_ckpt_dir(cfg))
+            if tid0:
+                _ckpt.cancel_flag_path(wd0, tid0).unlink(missing_ok=True)
+        except Exception:
+            pass
+        cancelled = False
+        try:
+            transcribe_cached(cfg)
+            # 若因取消提前 return，检查哨兵
+            try:
+                from fusion import checkpoint as _ckpt
+                if _ckpt.is_cancel_requested(
+                    str(_ckpt.resolve_ckpt_dir(cfg)), str(cfg.get("task_id") or ""),
+                ):
+                    cancelled = True
+            except Exception:
+                pass
+            emit({"type": "job_end", "ok": not cancelled, "cancelled": cancelled})
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            try:
+                from fusion import checkpoint as _ckpt
+                from fusion import recovery as _rec
+                _rec.save_crash_scene(
+                    str(_ckpt.resolve_ckpt_dir(cfg)),
+                    task_id=str(cfg.get("task_id") or ""),
+                    reason="serve job exception",
+                    exc=exc,
+                )
+            except Exception:
+                pass
+            emit({"type": "error", "message": (str(exc) or exc.__class__.__name__)[:400]})
+            emit({"type": "job_end", "ok": False})
+        finally:
+            _cleanup_work_dir(cfg)
+    global _CACHED_ENGINE
+    if _CACHED_ENGINE is not None:
+        try:
+            _CACHED_ENGINE.release()
+        except Exception:
+            pass
+        _CACHED_ENGINE = None
+    return 0
+
+
 def main() -> int:
+    if "--serve" in sys.argv:
+        return serve()
+    cfg: dict = {}
     try:
         raw = sys.stdin.read()
         cfg = json.loads(raw) if raw.strip() else {}
@@ -608,13 +1041,22 @@ def main() -> int:
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 - 统一收敛为 error 事件
+        try:
+            from fusion import checkpoint as _ckpt
+            from fusion import recovery as _rec
+            _rec.save_crash_scene(
+                str(_ckpt.resolve_ckpt_dir(cfg)),
+                task_id=str(cfg.get("task_id") or ""),
+                reason="oneshot exception",
+                exc=exc,
+            )
+        except Exception:
+            pass
         message = str(exc) or exc.__class__.__name__
         emit({"type": "error", "message": message[:400]})
         return 1
     finally:
-        work_dir = cfg.get("work_dir")
-        if work_dir:
-            shutil.rmtree(work_dir, ignore_errors=True)
+        _cleanup_work_dir(cfg)
     return 0
 
 

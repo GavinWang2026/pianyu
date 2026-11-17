@@ -49,6 +49,7 @@
     btnOpenFolder: $('btnOpenFolder'),
 
     btnTheme: $('btnTheme'),
+    btnLang: $('btnLang'),
     btnHistory: $('btnHistory'),
     btnSettings: $('btnSettings'),
     historyBadge: $('historyBadge'),
@@ -59,12 +60,28 @@
 
     settingsDrawer: $('settingsDrawer'),
     setDir: $('setDir'),
+    setRetainDays: $('setRetainDays'),
+    setOutputsMaxGb: $('setOutputsMaxGb'),
+    btnStoragePurge: $('btnStoragePurge'),
+    storageStatsHint: $('storageStatsHint'),
     setProxyMode: $('setProxyMode'),
     setProxyUrl: $('setProxyUrl'),
     setCookies: $('setCookies'),
     setPreferSubtitle: $('setPreferSubtitle'),
     setAsrEngine: $('setAsrEngine'),
+    setAsrHotwords: $('setAsrHotwords'),
+    setPlaylistMax: $('setPlaylistMax'),
+    setObsidianDir: $('setObsidianDir'),
+    setLiveRecord: $('setLiveRecord'),
+    setDownloadRate: $('setDownloadRate'),
+    setAsrDiarize: $('setAsrDiarize'),
+    setNotionToken: $('setNotionToken'),
+    setNotionDb: $('setNotionDb'),
+    setFeishuWebhook: $('setFeishuWebhook'),
     asrEngineTip: $('asrEngineTip'),
+    btnTsEdit: $('btnTsEdit'),
+    btnTsUndo: $('btnTsUndo'),
+    btnTsRedo: $('btnTsRedo'),
     setLlmUrl: $('setLlmUrl'),
     setLlmModel: $('setLlmModel'),
     setLlmKey: $('setLlmKey'),
@@ -155,6 +172,9 @@
     subtitleKind: '',   // manual | auto
     subtitleLang: '',
     engineUsed: '',
+    editing: false,
+    undoStack: [],
+    redoStack: [],
   };
 
   // 文案后处理状态
@@ -369,6 +389,16 @@
       .map((t) => `<span class="pill">${escapeHtml(t)}</span>`)
       .join('');
 
+    if (info.is_live) {
+      const secs = info.live_record_seconds || 0;
+      el.previewMeta.insertAdjacentHTML(
+        'beforeend',
+        `<span class="pill pill-sub" title="直播将限时录制一段，非完整回放">` +
+        `直播 · 录制 ${secs || '?'} 秒</span>`,
+      );
+      toast(`检测到直播：将限时录制约 ${secs} 秒片段`, 'info');
+    }
+
     // 字幕可用性：来自解析时的同一次元信息请求，零额外开销
     const subs = info.subtitles || {};
     const hasSub = !!(subs.manual && subs.manual.length) || !!(subs.auto && subs.auto.length);
@@ -424,7 +454,9 @@
       else if (q.needs_merge) tag = '<span class="q-tag merge">合并</span>';
 
       const sizeText = q.filesize ? `≈ ${fmtBytes(q.filesize)}` : '体积未知';
-      btn.title = q.resolution || q.label;
+      const bits = [q.resolution, q.dynamic_range, q.audio_language, q.tbr_mbps ? `${q.tbr_mbps} Mbps` : '']
+        .filter(Boolean).join(' · ');
+      btn.title = bits || q.label;
       btn.innerHTML = `${tag}<span class="q-label">${escapeHtml(q.label)}</span><span class="q-size">${sizeText}</span>`;
 
       btn.addEventListener('click', () => {
@@ -497,6 +529,8 @@
           thumbnail: state.info.thumbnail || '',
           extractor: state.info.extractor || '',
           label: q.label,
+          is_live: !!state.info.is_live,
+          live_record_seconds: state.info.live_record_seconds || 0,
         },
       });
 
@@ -740,6 +774,9 @@
     asr.subtitleKind = '';
     asr.subtitleLang = '';
     asr.engineUsed = '';
+    asr.editing = false;
+    asr.undoStack = [];
+    asr.redoStack = [];
     el.tsLive.innerHTML = '';
     el.tsBody.innerHTML = '';
     el.tsCount.textContent = '';
@@ -748,6 +785,7 @@
     el.tsViewSwitch.querySelectorAll('button').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.view === 'plain');
     });
+    updateEditButtons();
     resetPolishState();
   }
 
@@ -1085,6 +1123,101 @@
     renderAsrBody();
   }
 
+  function syncAsrText() {
+    asr.text = asr.segments.map((s) => (s.text || '').trim()).filter(Boolean).join('\n');
+  }
+
+  function snapshotSegments() {
+    return asr.segments.map((s) => ({
+      start: s.start, end: s.end, text: s.text || '',
+    }));
+  }
+
+  function pushUndo() {
+    asr.undoStack.push(snapshotSegments());
+    if (asr.undoStack.length > 40) asr.undoStack.shift();
+    asr.redoStack = [];
+    updateEditButtons();
+  }
+
+  function updateEditButtons() {
+    if (el.btnTsEdit) {
+      el.btnTsEdit.classList.toggle('btn-editing', !!asr.editing);
+      el.btnTsEdit.textContent = asr.editing ? '完成校对' : '校对';
+    }
+    if (el.btnTsUndo) {
+      el.btnTsUndo.hidden = !asr.editing;
+      el.btnTsUndo.disabled = !asr.undoStack.length;
+    }
+    if (el.btnTsRedo) {
+      el.btnTsRedo.hidden = !asr.editing;
+      el.btnTsRedo.disabled = !asr.redoStack.length;
+    }
+  }
+
+  function applySegmentEdit(index, nextText) {
+    if (!asr.segments[index]) return;
+    const prev = asr.segments[index].text || '';
+    const text = String(nextText || '').replace(/\s+/g, ' ').trim();
+    if (text === prev.trim()) return;
+    pushUndo();
+    const seg = asr.segments[index];
+    const oldLen = Math.max(1, (prev || '').length);
+    const newLen = Math.max(1, text.length);
+    const span = Math.max(0.4, (Number(seg.end) || 0) - (Number(seg.start) || 0));
+    // 改字后按长度比例微调本段时长，保持与邻段不重叠
+    let newEnd = Number(seg.start) + span * (newLen / oldLen);
+    const next = asr.segments[index + 1];
+    if (next && Number(next.start) > Number(seg.start)) {
+      newEnd = Math.min(newEnd, Number(next.start) - 0.05);
+    }
+    seg.text = text;
+    seg.end = Math.max(Number(seg.start) + 0.4, Math.round(newEnd * 100) / 100);
+    syncAsrText();
+    const summary = `共 ${asr.segments.length} 句 · ${asr.text.length} 字（已校对）`;
+    el.tsMeta.textContent = summary;
+    el.tsCount.textContent = summary;
+  }
+
+  function toggleProofread() {
+    if (!asr.segments.length) {
+      toast('没有可校对的句子', 'error');
+      return;
+    }
+    if (polish.applied) {
+      toast('请先点「看原文」再校对时间轴句子', 'error');
+      return;
+    }
+    asr.editing = !asr.editing;
+    if (asr.editing) {
+      asr.view = 'timed';
+      document.querySelectorAll('#tsViewSwitch [data-view]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-view') === 'timed');
+      });
+    }
+    updateEditButtons();
+    renderAsrBody();
+    toast(asr.editing ? '可直接改字；导出 SRT 会带上修改' : '已退出校对', 'success');
+  }
+
+  function undoProofread() {
+    if (!asr.undoStack.length) return;
+    asr.redoStack.push(snapshotSegments());
+    asr.segments = asr.undoStack.pop();
+    syncAsrText();
+    updateEditButtons();
+    renderAsrBody();
+  }
+
+  function redoProofread() {
+    if (!asr.redoStack.length) return;
+    asr.undoStack.push(snapshotSegments());
+    asr.segments = asr.redoStack.pop();
+    syncAsrText();
+    updateEditButtons();
+    renderAsrBody();
+  }
+
   function renderAsrBody() {
     if (!asr.segments.length) {
       el.tsBody.innerHTML = '<div class="ts-empty">没有识别到可用的语音内容，试试换一种语言或换一个视频</div>';
@@ -1096,11 +1229,30 @@
     if (asr.view === 'timed') {
       // 时间戳视图：整理后的段落也带时间轴（按文本比例对齐回原始分段）
       const rows = (usePolish && polish.paragraphs.length) ? polish.paragraphs : asr.segments;
-      el.tsBody.innerHTML = rows.map((row) => (
-        `<div class="ts-line${usePolish ? ' is-cleaned' : ''}">` +
+      const editable = asr.editing && !usePolish;
+      const hint = editable
+        ? '<p class="ts-edit-hint">校对模式：点击句子改字，失焦即保存；撤销/重做可用。导出 SRT 使用当前时间轴。</p>'
+        : '';
+      el.tsBody.innerHTML = hint + rows.map((row, i) => (
+        `<div class="ts-line${usePolish ? ' is-cleaned' : ''}${editable ? ' is-editing' : ''}" data-idx="${i}">` +
         `<span class="ts-stamp">${fmtStamp(row.start)}</span>` +
-        `<p>${escapeHtml(row.text)}</p></div>`
+        `<p${editable ? ' contenteditable="true" spellcheck="true"' : ''}>${escapeHtml(row.text)}</p></div>`
       )).join('');
+      if (editable) {
+        el.tsBody.querySelectorAll('.ts-line[data-idx] p[contenteditable]').forEach((node) => {
+          node.addEventListener('blur', () => {
+            const wrap = node.closest('[data-idx]');
+            const idx = wrap ? parseInt(wrap.getAttribute('data-idx'), 10) : -1;
+            if (idx >= 0) applySegmentEdit(idx, node.textContent || '');
+          });
+          node.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+              ev.preventDefault();
+              node.blur();
+            }
+          });
+        });
+      }
       return;
     }
 
@@ -1383,7 +1535,7 @@
       const thumb = t.thumbnail ? thumbSrc(t.thumbnail) : '';
       return `
         <div class="history-item">
-          <img class="history-thumb" src="${thumb}" alt="" onerror="this.style.visibility='hidden'" />
+          <img class="history-thumb" src="${thumb}" alt="" data-hide-on-error="1" />
           <div class="history-info">
             <b title="${escapeHtml(t.title || t.url)}">${escapeHtml(t.title || '未命名')}</b>
             <span>${escapeHtml(platformName(t.extractor))}${escapeHtml(pct)}</span>
@@ -1391,6 +1543,10 @@
           <span class="history-status ${statusClass}">${display}</span>
         </div>`;
     }).join('');
+    // CSP：不用内联 onerror，改事件委托
+    el.historyList.querySelectorAll('img[data-hide-on-error]').forEach((img) => {
+      img.addEventListener('error', () => { img.style.visibility = 'hidden'; }, { once: true });
+    });
   }
 
   // ------------------------------------------------------------- 设置
@@ -1401,11 +1557,23 @@
       state.envProxy = data.env_proxy || '';
 
       el.setDir.value = data.config.download_dir || '';
+      if (el.setRetainDays) el.setRetainDays.value = data.config.task_retain_days ?? 7;
+      if (el.setOutputsMaxGb) el.setOutputsMaxGb.value = data.config.outputs_max_gb ?? 5;
       el.setProxyMode.value = data.config.proxy_mode || 'never';
+      refreshStorageStats();
       el.setProxyUrl.value = data.config.proxy_url || '';
       el.setCookies.value = data.config.cookies_from_browser || '';
       if (el.setPreferSubtitle) el.setPreferSubtitle.checked = data.config.prefer_subtitle !== false;
       if (el.setAsrEngine) el.setAsrEngine.value = data.config.asr_engine || 'auto';
+      if (el.setAsrHotwords) el.setAsrHotwords.value = data.config.asr_hotwords || '';
+      if (el.setPlaylistMax) el.setPlaylistMax.value = data.config.playlist_max_entries || 1;
+      if (el.setObsidianDir) el.setObsidianDir.value = data.config.obsidian_dir || '';
+      if (el.setLiveRecord) el.setLiveRecord.value = data.config.live_record_seconds ?? 300;
+      if (el.setDownloadRate) el.setDownloadRate.value = data.config.download_rate_kbps ?? 0;
+      if (el.setAsrDiarize) el.setAsrDiarize.checked = !!data.config.asr_diarize;
+      if (el.setNotionToken) el.setNotionToken.value = data.config.notion_token || '';
+      if (el.setNotionDb) el.setNotionDb.value = data.config.notion_database_id || '';
+      if (el.setFeishuWebhook) el.setFeishuWebhook.value = data.config.feishu_webhook || '';
       if (el.setLlmUrl) el.setLlmUrl.value = data.config.llm_base_url || '';
       if (el.setLlmModel) el.setLlmModel.value = data.config.llm_model || '';
       if (el.setLlmKey) el.setLlmKey.value = data.config.llm_api_key || '';
@@ -1419,17 +1587,42 @@
     }
   }
 
+  async function refreshStorageStats() {
+    if (!el.storageStatsHint) return;
+    try {
+      const data = await api('/api/storage/stats');
+      const gb = ((data.outputs_bytes || 0) / (1024 ** 3)).toFixed(2);
+      const max = (data.policy && data.policy.outputs_max_gb) || 0;
+      el.storageStatsHint.textContent = max > 0
+        ? `当前产物约 ${gb} GB / 上限 ${max} GB`
+        : `当前产物约 ${gb} GB（不限）`;
+    } catch (_) {
+      el.storageStatsHint.textContent = '';
+    }
+  }
+
   async function saveConfig() {
     try {
       const data = await api('/api/config', {
         method: 'POST',
         body: {
           download_dir: el.setDir.value.trim(),
+          task_retain_days: el.setRetainDays ? (parseInt(el.setRetainDays.value, 10) || 7) : 7,
+          outputs_max_gb: el.setOutputsMaxGb ? (parseFloat(el.setOutputsMaxGb.value) || 0) : 5,
           proxy_mode: el.setProxyMode.value,
           proxy_url: el.setProxyUrl.value.trim(),
           cookies_from_browser: el.setCookies.value,
           prefer_subtitle: el.setPreferSubtitle ? el.setPreferSubtitle.checked : true,
           asr_engine: el.setAsrEngine ? el.setAsrEngine.value : 'auto',
+          asr_hotwords: el.setAsrHotwords ? el.setAsrHotwords.value : '',
+          playlist_max_entries: el.setPlaylistMax ? (parseInt(el.setPlaylistMax.value, 10) || 1) : 1,
+          obsidian_dir: el.setObsidianDir ? el.setObsidianDir.value.trim() : '',
+          live_record_seconds: el.setLiveRecord ? (parseInt(el.setLiveRecord.value, 10) || 0) : 300,
+          download_rate_kbps: el.setDownloadRate ? (parseInt(el.setDownloadRate.value, 10) || 0) : 0,
+          asr_diarize: el.setAsrDiarize ? el.setAsrDiarize.checked : false,
+          notion_token: el.setNotionToken && el.setNotionToken.value !== '***' ? el.setNotionToken.value.trim() : undefined,
+          notion_database_id: el.setNotionDb ? el.setNotionDb.value.trim() : '',
+          feishu_webhook: el.setFeishuWebhook && el.setFeishuWebhook.value !== '***' ? el.setFeishuWebhook.value.trim() : undefined,
           llm_base_url: el.setLlmUrl ? el.setLlmUrl.value.trim() : '',
           llm_model: el.setLlmModel ? el.setLlmModel.value.trim() : '',
           llm_api_key: el.setLlmKey ? el.setLlmKey.value.trim() : '',
@@ -1549,6 +1742,12 @@
         .catch(() => toast('打开失败', 'error'));
     });
 
+    if (el.btnLang) {
+      el.btnLang.addEventListener('click', () => {
+        if (window.AVD_I18N) window.AVD_I18N.toggle();
+      });
+    }
+
     el.btnTheme.addEventListener('click', () => {
       const now = document.documentElement.getAttribute('data-theme');
       applyTheme(now === 'dark' ? 'light' : 'dark');
@@ -1594,6 +1793,21 @@
     el.btnLoadModels.addEventListener('click', loadLlmModels);
 
     el.btnSaveSettings.addEventListener('click', saveConfig);
+    if (el.btnStoragePurge) {
+      el.btnStoragePurge.addEventListener('click', async () => {
+        try {
+          el.btnStoragePurge.disabled = true;
+          const data = await api('/api/storage/purge', { method: 'POST', body: {} });
+          const freed = ((data.trim && data.trim.freed) || 0) / (1024 * 1024);
+          toast(`已清理：删除 ${(data.trim && data.trim.deleted) || 0} 个媒体文件 · 释放 ${freed.toFixed(1)} MB`, 'success');
+          refreshStorageStats();
+        } catch (err) {
+          toast(err.message || '清理失败', 'error');
+        } finally {
+          el.btnStoragePurge.disabled = false;
+        }
+      });
+    }
 
     // ---------------------------------------------------------- 文案提取
     el.btnExtract.addEventListener('click', extractFromCurrent);
@@ -1647,10 +1861,83 @@
       const btn = e.target.closest('button[data-view]');
       if (!btn) return;
       asr.view = btn.dataset.view;
+      if (asr.editing && asr.view !== 'timed') {
+        asr.editing = false;
+        updateEditButtons();
+      }
       el.tsViewSwitch.querySelectorAll('button').forEach((node) => {
         node.classList.toggle('active', node === btn);
       });
       renderAsrBody();
+    });
+
+    // 知识库检索 → 时间轴互跳雏形（旗舰面板发 avd:library-seek）
+    window.addEventListener('avd:library-seek', (ev) => {
+      const detail = (ev && ev.detail) || {};
+      const at = Number(detail.at);
+      const panel = $('transcriptPanel') || el.tsBody;
+      if (Number.isFinite(at) && asr.segments && asr.segments.length) {
+        asr.view = 'timed';
+        if (el.tsViewSwitch) {
+          el.tsViewSwitch.querySelectorAll('button').forEach((node) => {
+            node.classList.toggle('active', node.getAttribute('data-view') === 'timed');
+          });
+        }
+        renderAsrBody();
+        const source = (polish.applied && polish.paragraphs.length)
+          ? polish.paragraphs
+          : asr.segments;
+        const rows = el.tsBody ? el.tsBody.querySelectorAll('.ts-line[data-idx]') : [];
+        let best = null;
+        let bestDist = Infinity;
+        rows.forEach((node) => {
+          const idx = parseInt(node.getAttribute('data-idx') || '-1', 10);
+          const seg = source[idx];
+          if (!seg) return;
+          const dist = Math.abs(Number(seg.start) - at);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = node;
+          }
+        });
+        if (el.tsBody) {
+          el.tsBody.querySelectorAll('.ts-line.is-seek-target').forEach((n) => {
+            n.classList.remove('is-seek-target');
+          });
+        }
+        if (best) {
+          best.classList.add('is-seek-target');
+          best.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        if (panel && panel.scrollIntoView) {
+          panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        toast(`已定位到 ${detail.clock || `${at.toFixed(1)}s`}`, 'success');
+        return;
+      }
+      // 无本地分段时：尽量用网页深链 #t= 打开出处
+      const url = String(detail.url || '').trim();
+      if (url && /^https?:\/\//i.test(url)) {
+        const deep = url.includes('#') ? url : `${url}#t=${Math.max(0, Math.floor(at || 0))}`;
+        window.open(deep, '_blank', 'noopener,noreferrer');
+        toast('已打开出处链接（带时间戳）', 'success');
+        return;
+      }
+      toast(detail.clock
+        ? `命中 ${detail.clock}，当前无本地时间轴可跳`
+        : '当前无本地时间轴可跳', 'error');
+    });
+
+    if (el.btnTsEdit) el.btnTsEdit.addEventListener('click', toggleProofread);
+    if (el.btnTsUndo) el.btnTsUndo.addEventListener('click', undoProofread);
+    if (el.btnTsRedo) el.btnTsRedo.addEventListener('click', redoProofread);
+    document.addEventListener('keydown', (e) => {
+      if (!asr.editing) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoProofread(); }
+      if (e.key === 'z' && e.shiftKey) { e.preventDefault(); redoProofread(); }
+      if (e.key === 'y') { e.preventDefault(); redoProofread(); }
     });
 
     el.btnTsCopy.addEventListener('click', copyTranscript);

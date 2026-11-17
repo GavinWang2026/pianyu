@@ -13,7 +13,32 @@ APP_DIR = Path(__file__).resolve().parent.parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from fusion import diagnostics, engine_opts, guards, hardening  # noqa: E402
+# 测试隔离（HIST-01）：单测绝不写生产 outputs/avd_tasks.sqlite3，
+# 否则 UI 任务历史会被 unit-* 幽灵行污染（26/26 点开全空）。
+import os
+import tempfile
+os.environ.setdefault(
+    "AVD_DB_PATH",
+    str(Path(tempfile.mkdtemp(prefix="avd-test-db-")) / "tasks.sqlite3"),
+)
+# 素材库同样要隔离：库路径写死时单测会把「覆盖率样本」灌进真实素材库
+os.environ.setdefault(
+    "AVD_LIBRARY_DB",
+    str(Path(tempfile.mkdtemp(prefix="avd-test-lib-")) / "library.sqlite3"),
+)
+
+import importlib.util
+
+from fusion import avd_log, diagnostics, engine_opts, guards, hardening  # noqa: E402
+
+# 直接加载 config 模块，避免 downloader/__init__ 拉起 yt_dlp
+_cfg_spec = importlib.util.spec_from_file_location(
+    "_avd_config_ut", APP_DIR / "downloader" / "config.py")
+_cfg_mod = importlib.util.module_from_spec(_cfg_spec)
+assert _cfg_spec and _cfg_spec.loader
+_cfg_spec.loader.exec_module(_cfg_mod)
+ConfigStore = _cfg_mod.ConfigStore
+MAX_HOTWORDS = _cfg_mod.MAX_HOTWORDS
 
 
 class ConfigPatchTests(unittest.TestCase):
@@ -41,6 +66,43 @@ class ConfigPatchTests(unittest.TestCase):
             "llm_base_url": "http://127.0.0.1:11434",
         })
         self.assertTrue(ok, why)
+
+    def test_obsidian_must_be_under_home(self) -> None:
+        ok, _ = hardening.validate_config_patch({"obsidian_dir": "/etc/obsidian"})
+        self.assertFalse(ok)
+        ok, why = hardening.validate_config_patch({
+            "obsidian_dir": str(Path.home() / "Documents" / "ObsidianVault"),
+            "playlist_max_entries": 10,
+            "asr_hotwords": "术语A，术语B",
+        })
+        self.assertTrue(ok, why)
+        ok, _ = hardening.validate_config_patch({"playlist_max_entries": 99})
+        self.assertFalse(ok)
+
+
+class HotwordAndLogTests(unittest.TestCase):
+    def test_hotword_list_caps_and_dedupes(self) -> None:
+        words = ConfigStore.hotword_list("甲，乙,甲\n丙")
+        self.assertEqual(words, ["甲", "乙", "丙"])
+        big = "，".join(f"词{i}" for i in range(MAX_HOTWORDS + 50))
+        self.assertEqual(len(ConfigStore.hotword_list(big)), MAX_HOTWORDS)
+
+    def test_avd_log_redacts_secrets(self) -> None:
+        redacted = avd_log._redact("api_key=sk-secret123 cookie=abc token=xyz")
+        self.assertNotIn("sk-secret123", redacted)
+        self.assertIn("***", redacted)
+        avd_log.info("unit-test ping", task="t1")
+        self.assertTrue(avd_log.LOG_FILE.parent.is_dir())
+
+    def test_live_clip_opts_and_validate(self) -> None:
+        ok, _ = hardening.validate_config_patch({"live_record_seconds": 300})
+        self.assertTrue(ok)
+        ok, _ = hardening.validate_config_patch({"live_record_seconds": 0})
+        self.assertTrue(ok)
+        ok, _ = hardening.validate_config_patch({"live_record_seconds": -1})
+        self.assertTrue(ok)
+        ok, _ = hardening.validate_config_patch({"live_record_seconds": 10})
+        self.assertFalse(ok)
 
 
 class LlmEgressTests(unittest.TestCase):
@@ -176,6 +238,57 @@ class ServerHardeningTests(unittest.TestCase):
     def test_json_limit(self) -> None:
         self.assertEqual(hardening.MAX_JSON_BYTES, 1024 * 1024)
         self.assertTrue(issubclass(hardening.PayloadTooLarge, ValueError))
+
+    def test_request_token_and_origin_guard(self) -> None:
+        """D35：Token 走常量时间比较；错 Token / 无 Token / 非本机 Host 均拒绝。"""
+
+        class _Handler:
+            def __init__(self, headers):
+                self.headers = headers
+
+        old = os.environ.get("AVD_TOKEN")
+        os.environ["AVD_TOKEN"] = "s3cret-token"
+        try:
+            ok, _ = guards.check_request(
+                _Handler({"Host": "127.0.0.1:8760", "X-AVD-Token": "s3cret-token"}))
+            self.assertTrue(ok)
+            for headers in (
+                {"Host": "127.0.0.1:8760", "X-AVD-Token": "wrong"},
+                {"Host": "127.0.0.1:8760"},
+                {"Host": "evil.example.com", "X-AVD-Token": "s3cret-token"},
+                {"Host": "127.0.0.1:8760", "X-AVD-Token": "s3cret-token",
+                 "Origin": "https://evil.example.com"},
+            ):
+                ok, _ = guards.check_request(_Handler(headers))
+                self.assertFalse(ok, headers)
+        finally:
+            if old is None:
+                os.environ.pop("AVD_TOKEN", None)
+            else:
+                os.environ["AVD_TOKEN"] = old
+
+
+class PackagingContractTests(unittest.TestCase):
+    """D23 / D24：交付脚本与文档不得再承诺 Python 3.10。"""
+
+    def test_macos_launchers_require_311(self) -> None:
+        for name in ("start.command", "启动旗舰版.command", "一键启动.command"):
+            body = (APP_DIR / name).read_text(encoding="utf-8")
+            self.assertIn("(3, 11)", body, name)
+            self.assertNotIn("(3, 10)", body, name)
+            self.assertNotIn("python3.10", body, name)
+            self.assertIn("Python 3.11+", body, name)
+
+    def test_app_builder_searches_python_and_states_asr_gap(self) -> None:
+        body = (APP_DIR / "packaging/macos/build_app.sh").read_text(encoding="utf-8")
+        self.assertIn("3,11", body)
+        self.assertNotIn('exec python3 -c', body)
+        self.assertIn(".venv-asr", body)
+        self.assertIn("setup-asr.command", body)
+
+    def test_readme_declares_python_311(self) -> None:
+        body = (APP_DIR / "README-FLAGSHIP.md").read_text(encoding="utf-8")
+        self.assertIn("Python 3.11+", body)
 
 
 if __name__ == "__main__":

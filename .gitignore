@@ -11,11 +11,19 @@
 /cookies/*.txt
 /cookies/*.json
 /cookies/*.db
+/cookies/*.rtf
+/cookies/*.har
+*.rtf
+*.har
 
 # 本机配置、运行产物、缓存
 /config.json
 /outputs/
 /downloads/
+/logs/
+*.egg-info/
+/dist/
+/build/
 /uploads/
 /.uploads/
 __pycache__/
@@ -23,3 +31,19 @@ __pycache__/
 .DS_Store
 *.log
 /tmp/
+
+# 可写状态目录（Cookie 副本等，绝不进包/进库）
+/.state/
+
+# 本地临时目录（验证脚本 / 覆盖率用）
+/.tmpcov/
+/.coverage_r2b
+
+# 联网验证用的临时素材（不进包、不进库）
+/.tmpmedia/
+
+# 本地审计报告、覆盖率与分享包（证据留本地，不入库）
+/evidence/
+/.coverage
+/.workbuddy/
+/.trae-html-share-packages/

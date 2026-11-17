@@ -73,7 +73,23 @@ def main() -> int:
 
     from server import create_server  # noqa: E402
 
-    host = os.environ.get("AVD_HOST", "127.0.0.1")
+    # NET-01：默认真本机；AVD_HOST=0.0.0.0 会与守卫「仅本机 Host」冲突导致 LAN 全 403。
+    # 若确需局域网访问，必须同时设置 AVD_TOKEN，否则强制回落到 127.0.0.1。
+    host = (os.environ.get("AVD_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    token = (os.environ.get("AVD_TOKEN") or "").strip()
+    lan_warning = ""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        if not token:
+            lan_warning = (
+                f"AVD_HOST={host} 但未设置 AVD_TOKEN：已强制回落到 127.0.0.1"
+                "（守卫只放行本机 Host；局域网模式请同时 export AVD_TOKEN=…）"
+            )
+            host = "127.0.0.1"
+        else:
+            lan_warning = (
+                f"局域网模式：监听 {host}，请求须带 X-AVD-Token；"
+                "请确保防火墙与网段策略已收紧"
+            )
     try:
         port = int(os.environ.get("AVD_PORT", "8760"))
     except ValueError:
@@ -89,6 +105,8 @@ def main() -> int:
 
     print(BANNER)
     print(f"  ▸ 服务地址      {url}")
+    if lan_warning:
+        print(f"  ▸ 网络提示      {lan_warning}")
     print(f"  ▸ 运行环境      Python {sys.version.split()[0]} · {sys.platform}"
           f"  (主服务 ≥3.11 / ASR 独立运行时 3.13)")
     print(f"  ▸ 下载引擎      yt-dlp {report['engine_version']}  (vendor/ 内嵌，已锁定)")

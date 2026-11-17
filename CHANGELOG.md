@@ -1,5 +1,121 @@
 # Changelog
 
+## v2.0.0-r6 · 第十一轮缺陷修复 · 第一批（2026-11-17）
+
+按第十一轮全面剖析（D21–D35）先做「让可交付成立」的一批，全部有回归测试。
+
+### 产物与测试
+- **D21**：修正 `test_one_probe_for_whole_pipeline` 的素材过短问题（35 字被判 C 级却断言
+  docx/txt）。新增 **A/B/C 产物矩阵测试**：A 级 6 件套、B 级 6 件套、C 级仅
+  md/srt/json，和生产裁剪契约逐项对齐。
+
+### 可运维性
+- **D25**：`fusion/persist.py` 不再静默 `except: pass`。落库/索引写失败会：
+  ① 在任务快照上标 `persist.failed` 降级项；② 写结构化日志；③ 在
+  `/api/fusion/health` 的 `persist.health` 暴露失败次数与最后错误。
+
+### 运行环境承诺
+- **D24**：README 与 `start.command` / `启动旗舰版.command` / `一键启动.command`
+  显式要求 **Python 3.11+**，删除 3.10 候选，缺失时给出安装指引。
+- **D23**：`.app` 启动器按 `runtime/python → 用户安装路径 → PATH` 搜索 3.11+，
+  找不到时弹原生对话框；构建脚本明确提示 `.venv-asr` 未随包（模型随包），
+  收敛「开箱即转写」的过度承诺。
+
+### 卫生与核算
+- **D32**：清理 40 个 4 字节 junk 文件；打包从黑名单改为**白名单**
+  （报告、验证脚本、测试、状态目录不再可能误入包）；单测清理改用
+  `shutil.rmtree`，不再在 `outputs/` 留空壳。
+- **D33**：`作者信息` / `NOTICE.md` 口径更新为 **30,571 行 / 78 文件**、
+  **285 项用例**；`verify_docs_units.py --assert-current` 自动核对文档与工作树。
+- **D35**：`AVD_TOKEN` 改用 `hmac.compare_digest`，README 增加威胁模型说明：
+  单机本地防护，Token 不是多用户权限边界。
+
+## v2.0.0-r5 · 交付阻断修复 + 四项落地（2026-11-14）
+
+本轮两个批次：**R1** 修发布阻断项，**R2** 按 项目负责人 定的顺序做四件事
+（补测 → 降级模型化 → 接口接 UI → 真机续跑）。
+
+### R1 · 交付阻断修复
+- Cookie 只读源 + 出包凭据自检：不再把凭据复制进包内可写目录。
+- 保留策略作用域收窄到 `outputs/`，不再误删兄弟目录媒体。
+- 下载媒体复用：下载后处理异常时先认盘，媒体已落盘就不重下（省 26s 空档）。
+- 低内容素材告警：转写结果过短不再当成功出稿。
+- CI 门禁转绿；关键词词级化；DOCX 样式与目录域修正；安全响应头。
+
+### R2 · ① 覆盖率补测
+- `fusion/pipeline.py` 60% → **82%**；`fusion/task_store.py` 59% → **97%**；
+  `fusion/degradation.py` 97%。用例 159 → **269** 项。
+- 新增 `tests/test_r2_coverage.py`（77 项）、`EventBus` / `Registry` 分支测试。
+- **单测污染修复**：`fusion/library.py` 路径写死，599 行素材库里 598 行是测试垃圾。
+  新增 `AVD_LIBRARY_DB` 隔离 + 备份 + 清理（`outputs/_backup/`）。
+
+### R2 · ② 降级模型化
+- 新增 `fusion/degradation.py`：`note/warn/major/block` 四档 +
+  24 条 code 目录表 + `retriable` / `action`，frozen dataclass。
+- `task.degraded: list[str]` 保持向后兼容，另增 `degraded_items` / `degraded_summary`；
+  前端四档 pill、按严重度排序、头部汇总「共 N 条 · M 条可重试」。
+
+### R2 · ③ 接口接 UI
+- 接通旗舰版 5 个「后端有、前端零调用」的路由：合集 / 素材 / 任务历史 /
+  章节切片 / 存储统计。
+- **修真实缺陷**：`to_dict()` 从不返回 `chapters`，`/api/pipeline/export-chapters`
+  100% 回「任务没有章节」；索引不落 `meta` 导致重启后标题变空。
+
+### R2 · ④ 真机长素材续跑（发现 3 个真实缺陷）
+- **D1 / P0**：worker 里从来 import 不到 `fusion`（`.venv-asr` + `tools/` 路径 +
+  池把 `PYTHONPATH` 清空），`from fusion import checkpoint` 每次 ImportError，
+  而所有调用点都 `except Exception: pass` —— 写检查点、取消哨兵、崩溃现场
+  **三件事一起静默失效**。修：补主包根 bootstrap，`_ckpt_probe()` 失败必须 `log()`。
+- **D2 / P1**：取消是「乐观置终态」，worker 还在写检查点，用户点重试从 0 重来。
+  修：`_wait_checkpoint_flush()`（默认 30s，`AVD_ASR_CANCEL_FLUSH_SECS` 可调）。
+- **D3 / P1**：上一单的尾巴毒害下一单（`job_end{cancelled:true}` 留在共享队列，
+  下一个任务刚排队就被判已取消）。修：`AsrPool.drain_pending()`，EOF 哨兵保留。
+- 顺带修：模型加载 78.8s 无事件（加 `_LoadHeartbeat`）、`info` 分支把 `duration`
+  冲成 0、纯文案进度传不上去、`safe_stem` 不清洗控制字符。
+- `tools/asr_worker.py` 续跑改为**按秒**（`resume_at`）而非 chunk 下标，
+  块内每 15s 落盘、取消前落盘。
+- 新增 `verify_long_resume.py`：预热 → 中途取消 → 同键续跑，12 条判据；
+  `--source` 支持真实网络素材。
+- 新增 `verify_cross_platform.py`：AST 扫无 `encoding` 的文本 I/O、
+  `safe_stem` 11 用例、真实落盘（中文/emoji/长名/Windows 保留名）、
+  SRT/MD 无 `\r`/BOM、`guards.within` 路径围栏。
+
+### R2 · ⑤ 合规证据按 r5 重做（不恢复旧文件）
+- `SCA-供应链清单.md` 重新生成：**8 个包 → 23 个包**。
+- **NOTICE.md §2.2 补齐 23 个包**（此前 15 个组件零声明，Apache-2.0 §4 /
+  MIT 署名义务未履行）；§1 自研行数按 r5 实测重算：**29,903 行 / 78 文件**
+  （A 815 / B 19,245 / D 9,843）。
+- CVE 双源重跑：OSV **24 组件 0 命中**、历史漏洞 156 条逐条核验修复点；
+  PyPI Advisory **24 组件 0 条**（23 个 runtime 包 + vendored yt-dlp），附 `requests 2.31.0` 阳性对照（6 条）。
+- `内部核查清单-待确认.md` 更新到 r5：组件矩阵 9 → 27 项，
+  新增 Q13（历史漏声明追溯）/ Q14（PSF-2.0、CNRI-Python）/ Q15（git 主体占位）。
+- `作者信息` 重写为 r5 口径，附方法论坦白（含「上游原始包不在仓库内、
+  无法二次 diff」这条局限）。
+- 新增 `verify_supply_chain.py`：把「runtime 实物 / NOTICE / SBOM」三方对齐，
+  漂移即红，已接入 CI —— 这次的问题正是没有任何门禁能发现它。
+
+### R2 · ⑥ 可续跑入口打通
+- **修真实缺陷**：`_persist_index` 只落终态任务，崩在转写中途的任务从未入库；
+  重启后「可续跑」列表能列出 task_id，但 `retry` 直接抛「任务不存在」——
+  列表是活的，入口是死的。
+- 检查点新增 `source` 字段（来源 URL）；`Manager._rehydrate()` 从检查点重建任务；
+  `retry` 回落重建；前端列表项可点即续跑，旧检查点如实标灰并说明原因。
+
+### R2 · ⑦ 门禁挪到真正能挡住的位置（自查补修）
+- **发现自己的疏漏**：`verify_supply_chain.py` 挂进了源码仓 CI，但 `runtime/` 被
+  `.gitignore` 排除，CI 上不存在 → 脚本走 `SKIP` 返回 0，**看着绿，其实什么都没查**。
+  D4 能活这么久，就是因为门禁永远在查不到事实的地方。
+- `verify_supply_chain.py` 新增 `--root`（校验基准）、`--strict`（缺 runtime 即失败）、
+  `--docs-only`（不依赖 runtime，只校 NOTICE 与 SCA 互不矛盾；表格解析为空也判失败）。
+- 门禁分两层钉死：`packaging/macos/build_app.sh` 出包时跑 `--root <产物> --strict`
+  （runtime 与 NOTICE 同时在场，这才是缺陷能造成伤害的地方）；CI 跑 `--docs-only`
+  （守住两份文档不自相矛盾）。
+- 新增 `tests/test_supply_chain.py` 7 项：切根、严格模式失败、非严格 SKIP、
+  文档互校通过/缺行失败/空表拒绝、真实仓库一致。全量 **269 → 276 项**。
+- **文档数字重新对账**：本轮新增 2 个文件后，作者信息/NOTICE/LEGAL/CHANGELOG 里
+  的「29,443 行 / 76 文件」立即过期 → 实测改为 **29,903 行 / 78 文件**
+  （A 815 / B 19,245 / D 9,843，`asr_worker.py` 也由 1,063 更正为 1,064）。
+
 ## v2.0.0-r4 · 发布前核查（2026-11-12）
 
 项目负责人 拍板「先走 1 + 2」：① 补 Cookie 打通抖音全链；② 发布前核查包。
@@ -103,7 +219,7 @@ ASR 双引擎就绪、ffmpeg 在位；5 条攻击请求均被拒。发布包 18 
 
 ### 真实链路实测暴露并修复的 4 个缺陷
 - **F1 (P0)**：模型权重未随包、首次转写抛 `HfHubHTTPError`，方案书「断网当场验收」
-  不成立 → 预置 `models/faster-whisper-tiny/`（84 MB, MIT），新增
+  不成立 → 预置 `models/faster-whisper-tiny/`（~75 MiB, MIT），新增
   `fusion/asr_offline.py` 通过官方 `VD_ASR_FASTER_MODEL` 装配，上游零改动。
 - **F2 (P1)**：无音轨素材仍跑 ASR 并误报「环境未就绪」→ `pipeline.has_audio_stream()`
   ffprobe 判音轨，四类降级原因分开上报。

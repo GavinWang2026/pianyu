@@ -38,13 +38,27 @@ def download_model(repo: str) -> bool:
         print(_red(f"   ✗ 缺少 huggingface_hub：{exc}"))
         return False
 
+    # DEP-01：显式检查 httpx，避免抛出晦涩的 ModuleNotFoundError
+    try:
+        import httpx  # noqa: F401
+    except ImportError:
+        print(_red("   ✗ 未预置模型依赖 httpx（huggingface_hub 需要它）"))
+        print("     请重跑安装脚本，或：.venv-asr/bin/pip install httpx")
+        print("     若本地已有 models/ 权重，可跳过联网下载，直接启动 boot.py")
+        return False
+
     endpoint = os.environ.get("HF_ENDPOINT") or DEFAULT_MIRROR
     os.environ["HF_ENDPOINT"] = endpoint
     try:
         path = snapshot_download(repo)
     except Exception as exc:  # noqa: BLE001 - 网络原因千奇百怪，统一给一句人话
-        print(_red(f"   ✗ 模型下载失败：{str(exc)[:200]}"))
-        print(f"     可换镜像重试： HF_ENDPOINT=https://huggingface.co 重新运行")
+        msg = str(exc)
+        if "httpx" in msg.lower() or "No module named" in msg:
+            print(_red("   ✗ 未预置模型（依赖缺失），不是网络故障"))
+            print(f"     详情：{msg[:160]}")
+        else:
+            print(_red(f"   ✗ 模型下载失败：{msg[:200]}"))
+            print("     可换镜像重试： HF_ENDPOINT=https://huggingface.co 重新运行")
         return False
     print(f"   模型已就绪: {path}")
     print(f"   （镜像 {endpoint}）")

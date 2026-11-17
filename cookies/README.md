@@ -1,17 +1,16 @@
 # Cookie 放置说明（平台站点解析用）
 
-> **快速通道（r4）**：完整的人工获取 SOP 见 **`cookies/导出指引.md`**；
-> 体检与一键出稿用下面两条命令，**不要手工猜格式**：
+> 完整人工获取 SOP 见 **`cookies/导出指引.md`**。体检：
 >
 > ```bash
-> python3 cookies/cookie_doctor.py --probe     # 体检 + 真实链路复验（不回显 Cookie 值）
-> python3 run_douyin_e2e.py --dry-run          # 只诊断；ready=false 会写 BLOCKED.md
-> python3 run_douyin_e2e.py                    # ready=true 时才跑全链并留证
+> python3 cookies/cookie_doctor.py --probe     # 体检（不回显 Cookie 值）
 > ```
 >
-> 本机实测（2026-11-12）：Safari Cookie 库被 macOS TCC 拒绝读取，
-> Chrome / Edge / Firefox profile 均不存在，**当前没有可用凭据**。
-> 抖音完整出稿被阻塞，需按导出指引自行放置新鲜 Cookie。
+> 放置新鲜 Cookie 后，用界面「旗舰版 · 一键知识稿」或 `/api/platform/diagnose` 复验。
+>
+> **发布卫生**：发布包默认只含本说明与占位 `cookies.txt` 模板，**不含真实凭据**。
+> 打包前可运行 `python3 tools/secrets_scan.py --strict`；
+> `*.rtf` / `*.har` / `*.txt` 凭据文件已列入 `.gitignore`。
 
 部分平台（实测：抖音 / TikTok 系）要求浏览器验证挑战生成的 `s_v_web_id`，
 服务端直接请求其 Web detail API 会返回 403。旗舰版已接通两条官方 Cookie 通道，

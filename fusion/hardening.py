@@ -1,17 +1,12 @@
 # Copyright (c) 2026 Hyht-Team. All rights reserved.
 # See LICENSE (proprietary) and NOTICE.md (third-party components).
-"""P0–P2 遗留缺陷的集中加固层（B 类自研新增）。
+"""安全与稳定性加固层（自研）。
 
-对应《yt-dlp 能力对比评估》§09 与《发布验收报告》§09：
-
-    P0-5  配置可写导致任意目录写入 / 输出模板注入  → validate_config_patch()
-    P1-1  缩略图缓存无上限、无淘汰                 → trim_thumb_cache()
-    P1-2  无连接数 / 任务并发上限                  → LimitedThreadingHTTPServer
-    P1-4  JSON 请求体无大小限制                    → MAX_JSON_BYTES / PayloadTooLarge
-    P1-5  LLM base_url 形成第二处 SSRF + 数据外带   → check_llm_base_url()
-    P2-1  do_HEAD 复用 do_GET                      → HEAD_ONLY 辅助（server.py 内接线）
-    P2-2  上传完整性未校验                         → server.py 内接线
-    P2-4  锁外读写竞态                             → server.py / tasks.py 内接线
+    · 配置写入校验 / 路径越界防护           → validate_config_patch()
+    · 缩略图缓存上限与淘汰                 → trim_thumb_cache()
+    · 连接数 / 任务并发上限                → LimitedThreadingHTTPServer
+    · JSON 请求体大小限制                  → MAX_JSON_BYTES / PayloadTooLarge
+    · LLM base_url SSRF 防护               → check_llm_base_url()
 
 只依赖标准库；所有函数可单测，不改上游 yt-dlp 一行。
 """
@@ -164,6 +159,81 @@ def validate_config_patch(patch: dict[str, Any]) -> tuple[bool, str]:
         ok, why = check_llm_base_url(str(patch["llm_base_url"] or ""))
         if not ok:
             return False, why
+
+    if "obsidian_dir" in patch:
+        raw = str(patch["obsidian_dir"] or "").strip()
+        if raw:
+            if ".." in Path(raw).parts:
+                return False, "Obsidian 目录不允许包含 .. 上级路径"
+            try:
+                target = Path(raw).expanduser().resolve()
+            except (OSError, ValueError):
+                return False, "Obsidian 目录无法解析"
+            home = Path.home().resolve()
+            if target == Path(target.anchor):
+                return False, "Obsidian 目录不能是磁盘根目录"
+            lowered = str(target).lower()
+            if any(lowered == p.lower() or lowered.startswith(p.lower() + "/")
+                   for p in _FORBIDDEN_DIR_PREFIXES):
+                return False, "Obsidian 目录不能指向系统目录"
+            # 必须落在用户主目录下，避免任意写
+            try:
+                target.relative_to(home)
+            except ValueError:
+                return False, "Obsidian 目录必须位于用户主目录下"
+            if target.is_file():
+                return False, "Obsidian 目录指向了一个文件"
+
+    if "playlist_max_entries" in patch:
+        try:
+            n = int(patch["playlist_max_entries"])
+        except (TypeError, ValueError):
+            return False, "playlist_max_entries 必须是整数"
+        if n < 1 or n > 50:
+            return False, "playlist_max_entries 允许范围 1–50"
+
+    if "asr_hotwords" in patch:
+        raw = str(patch["asr_hotwords"] or "")
+        if len(raw) > 8000:
+            return False, "热词表过长（上限约 8000 字符）"
+
+    if "live_record_seconds" in patch:
+        try:
+            n = int(patch["live_record_seconds"])
+        except (TypeError, ValueError):
+            return False, "live_record_seconds 必须是整数"
+        if n not in (0, -1) and (n < 60 or n > 7200):
+            return False, "live_record_seconds 允许 0（拒绝）、-1（录到取消）或 60–7200"
+
+    if "download_rate_kbps" in patch:
+        try:
+            n = int(patch["download_rate_kbps"])
+        except (TypeError, ValueError):
+            return False, "download_rate_kbps 必须是整数"
+        if n < 0 or n > 100_000:
+            return False, "download_rate_kbps 允许 0–100000"
+
+    if "feishu_webhook" in patch:
+        raw = str(patch["feishu_webhook"] or "").strip()
+        if raw:
+            from urllib.parse import urlparse as _urlparse
+            p = _urlparse(raw)
+            if p.scheme != "https" or not p.hostname:
+                return False, "飞书 webhook 必须是 https URL"
+            host = (p.hostname or "").lower()
+            if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+                return False, "飞书 webhook 不能指向本机"
+
+    if "notion_token" in patch:
+        tok = str(patch["notion_token"] or "").strip()
+        if tok and len(tok) > 512:
+            return False, "notion_token 过长"
+
+    if "notion_database_id" in patch:
+        db = str(patch["notion_database_id"] or "").strip().replace("-", "")
+        if db and (len(db) != 32 or any(c not in "0123456789abcdefABCDEF" for c in db)):
+            return False, "notion_database_id 应为 32 位十六进制"
+
     return True, ""
 
 

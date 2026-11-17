@@ -1,0 +1,203 @@
+/* AVD Flagship panel — 外链样式，配合 CSP style-src 'self'（无 style 属性） */
+.avd-fab {
+  position: fixed; right: 24px; bottom: 24px; z-index: 9998;
+  display: flex; align-items: center; gap: 9px;
+  padding: 11px 17px; border-radius: 14px;
+  border: 1px solid rgba(139, 124, 246, 0.42);
+  background: rgba(28, 26, 42, 0.92); color: #f2f0ff;
+  font: 500 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer; backdrop-filter: blur(18px);
+  transition: transform 0.18s ease, border-color 0.18s ease;
+  box-shadow: 0 8px 28px rgba(10, 8, 24, 0.34);
+}
+.avd-fab:hover { transform: translateY(-2px); border-color: rgba(157, 143, 255, 0.78); }
+.avd-fab svg { width: 16px; height: 16px; flex: none; }
+
+.avd-panel {
+  position: fixed; right: 24px; bottom: 82px; z-index: 9997;
+  width: 418px; max-width: calc(100vw - 36px);
+  max-height: min(78vh, 720px); overflow: auto; padding: 20px; border-radius: 18px;
+  border: 1px solid rgba(139, 124, 246, 0.32);
+  background: rgba(24, 22, 36, 0.96); color: #e9e7f5;
+  backdrop-filter: blur(24px); box-shadow: 0 20px 60px rgba(8, 6, 20, 0.5);
+  font: 400 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: none;
+}
+.avd-panel.open { display: block; }
+.avd-panel.avd-drop-hot { border-color: rgba(157, 143, 255, 0.9); box-shadow: 0 0 0 2px rgba(109, 94, 252, 0.35); }
+.avd-file-label { cursor: pointer; display: inline-flex; align-items: center; }
+[data-theme="light"] .avd-panel {
+  background: rgba(255, 255, 255, 0.97); color: #221f33;
+  border-color: rgba(109, 94, 252, 0.28);
+}
+[data-theme="light"] .avd-fab { background: rgba(255, 255, 255, 0.95); color: #221f33; }
+
+.avd-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.avd-h h2 { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: 0.2px; }
+.avd-badge {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid rgba(109, 94, 252, 0.4); color: #b9acff;
+}
+[data-theme="light"] .avd-badge { color: #5b4bd6; }
+.avd-sub { margin: 0 0 14px; font-size: 11.5px; opacity: 0.62; line-height: 1.55; }
+.avd-row { display: flex; gap: 8px; align-items: center; }
+.avd-input {
+  flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
+  border: 1px solid rgba(150, 140, 200, 0.26); background: rgba(255, 255, 255, 0.05);
+  color: inherit; outline: none;
+}
+.avd-input:focus { border-color: rgba(139, 124, 246, 0.8); }
+.avd-ta {
+  width: 100%; min-height: 72px; resize: vertical; padding: 10px 12px; border-radius: 10px;
+  font-size: 12px; border: 1px solid rgba(150, 140, 200, 0.26);
+  background: rgba(255, 255, 255, 0.05); color: inherit; outline: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-sizing: border-box; margin-top: 8px;
+}
+.avd-ta:focus { border-color: rgba(139, 124, 246, 0.8); }
+[data-theme="light"] .avd-input,
+[data-theme="light"] .avd-ta { background: rgba(20, 16, 40, 0.04); }
+
+.avd-btn {
+  padding: 10px 14px; border-radius: 10px; border: 1px solid transparent; cursor: pointer;
+  font: 500 12.5px/1.2 inherit; background: #6d5efc; color: #fff;
+  white-space: nowrap; transition: opacity 0.15s ease;
+}
+.avd-btn:hover { opacity: 0.86; }
+.avd-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.avd-btn.ghost { background: transparent; border-color: rgba(150, 140, 200, 0.3); color: inherit; }
+
+.avd-opt {
+  display: flex; gap: 16px; align-items: center; margin: 11px 0 13px;
+  font-size: 11.5px; opacity: 0.78; flex-wrap: wrap;
+}
+.avd-opt label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+.avd-track {
+  height: 5px; border-radius: 99px; background: rgba(150, 140, 200, 0.18);
+  overflow: hidden; margin: 6px 0 8px;
+}
+.avd-fill {
+  height: 100%; width: 0; border-radius: 99px;
+  background: linear-gradient(90deg, #6d5efc, #a58bff); transition: width 0.3s ease;
+}
+.avd-status { font-size: 11.5px; opacity: 0.8; min-height: 18px; }
+.avd-note {
+  margin: 8px 0 0; padding: 9px 11px; border-radius: 10px; font-size: 11.5px; line-height: 1.55;
+  background: rgba(233, 176, 73, 0.09); border: 1px solid rgba(233, 176, 73, 0.24);
+  display: none;
+}
+.avd-note.show { display: block; }
+.avd-pre {
+  margin: 12px 0 0; padding: 12px; border-radius: 11px; max-height: 220px; overflow: auto;
+  font: 400 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+  background: rgba(10, 8, 20, 0.32); border: 1px solid rgba(150, 140, 200, 0.16);
+  display: none;
+}
+[data-theme="light"] .avd-pre { background: rgba(20, 16, 40, 0.04); }
+.avd-pre.show { display: block; }
+.avd-exports { display: flex; gap: 7px; margin-top: 11px; flex-wrap: wrap; }
+.avd-exports .avd-btn { padding: 7px 12px; font-size: 11.5px; }
+.avd-foot {
+  margin-top: 13px; padding-top: 11px; border-top: 1px solid rgba(150, 140, 200, 0.16);
+  font-size: 11px; opacity: 0.55;
+}
+
+/* 工具类：替代原内联 style= */
+.avd-row-wrap { margin-top: 8px; gap: 8px; flex-wrap: wrap; align-items: center; }
+.avd-inline-label {
+  margin: 0; display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; opacity: 0.62;
+}
+.avd-w-88 { width: 88px; flex: none; }
+.avd-w-72 { width: 72px; flex: none; }
+.avd-box { display: none; margin-top: 10px; }
+.avd-box.open-flex { display: flex; }
+.avd-box.open-block { display: block; }
+.avd-ta-tall { min-height: 140px; }
+.avd-sub-tight { margin: 0 0 6px; }
+.avd-mt-8 { margin-top: 8px; }
+.avd-line { margin: 4px 0; }
+.avd-line-sm { margin: 3px 0; }
+.avd-mt-4 { margin-top: 4px; }
+.avd-mt-6 { margin-top: 6px; }
+.avd-muted { opacity: 0.75; }
+.avd-tools {
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid rgba(150, 140, 200, 0.16);
+}
+.avd-tools-h {
+  font-size: 11.5px; font-weight: 600; opacity: 0.7; margin-bottom: 8px;
+  letter-spacing: 0.04em;
+}
+.avd-lib-out {
+  margin-top: 8px; max-height: 160px; overflow: auto;
+  font-size: 11.5px; line-height: 1.5; opacity: 0.9;
+}
+.avd-lib-out:empty { display: none; }
+.avd-lib-hit { margin: 4px 0; padding: 6px 8px; border-radius: 8px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(150,140,200,0.14); }
+.avd-lib-clickable { cursor: pointer; }
+.avd-lib-clickable:hover { border-color: rgba(108, 99, 255, 0.45); background: rgba(108, 99, 255, 0.08); }
+/* 旧检查点没有来源 URL：列表照实展示，但不给假的可点入口 */
+.avd-lib-disabled { opacity: 0.6; cursor: default; }
+.avd-lib-disabled:hover { border-color: inherit; background: transparent; }
+.avd-lib-title { font-weight: 650; }
+.avd-lib-clock {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid rgba(108, 99, 255, 0.45); background: rgba(108, 99, 255, 0.18);
+  color: inherit; font: inherit; font-size: 11px; font-weight: 650; cursor: pointer;
+}
+.avd-lib-clock:hover { background: rgba(108, 99, 255, 0.32); }
+.avd-lib-snip { opacity: 0.85; }
+.avd-stale { opacity: 0.55; }
+
+/* ---------------- R2-3：素材库浏览 / 任务历史 / 结构化降级 ---------------- */
+.avd-w-140 { width: 140px; flex: none; }
+select.avd-input {
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+  cursor: pointer;
+}
+select.avd-input option { background: #1f1d2e; color: #e9e7f5; }
+[data-theme="light"] select.avd-input option { background: #fff; color: #221f33; }
+
+/* 降级等级徽章：四档必须一眼可分（此前所有降级项长得一模一样） */
+.avd-pill {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 650; line-height: 1.6; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.avd-pill-note {
+  color: #9fb4c9; border-color: rgba(159, 180, 201, 0.38);
+  background: rgba(159, 180, 201, 0.12);
+}
+.avd-pill-warn {
+  color: #e8c07a; border-color: rgba(233, 176, 73, 0.45);
+  background: rgba(233, 176, 73, 0.14);
+}
+.avd-pill-major {
+  color: #f0a08a; border-color: rgba(240, 138, 110, 0.48);
+  background: rgba(240, 138, 110, 0.15);
+}
+.avd-pill-block {
+  color: #ff8f9c; border-color: rgba(255, 107, 129, 0.55);
+  background: rgba(255, 107, 129, 0.18);
+}
+[data-theme="light"] .avd-pill-note { color: #4a6072; }
+[data-theme="light"] .avd-pill-warn { color: #8a5d09; }
+[data-theme="light"] .avd-pill-major { color: #a24421; }
+[data-theme="light"] .avd-pill-block { color: #b3182f; }
+
+.avd-deg-head {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px; font-size: 11.5px; font-weight: 600;
+}
+.avd-deg-line { margin: 5px 0; }
+.avd-deg-act { margin-left: 2px; font-size: 11px; line-height: 1.5; }
+.avd-lib-meta { font-size: 11px; }

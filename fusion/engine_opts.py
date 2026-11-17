@@ -12,13 +12,23 @@
 即「平台站点链路」在旗舰版里连配置入口都没接上。本模块让 probe 与
 download 共用同一套 opts，且额外支持 Netscape 格式 ``cookies.txt``。
 
-安全约定：cookie 文件必须位于发布包内（防止把本机任意文件当 Cookie
-发给远端 = 数据外带），由 ``guards.within()`` 强制限定。
+安全约定（SEC-01 · 第九轮修订）：cookie **源文件**必须位于发布包内（防止把
+本机任意文件当 Cookie 发给远端 = 数据外带），由 ``guards.within()`` 强制限定。
+
+同时修正「解析一次就污染发布包」的回归：yt-dlp 在 ``cookiefile`` 被设置且开了
+``cookies_from_browser`` 时，退出会把**整罐浏览器 Cookie** 回写到该文件。实测
+2026-11-14 一次 ``/api/platform/diagnose``（1.42s）就把 ``cookies/cookies.txt``
+从 450 行重写成 447 行 / 61KB / 109 个域名（含 sessionid）。因此：
+
+* 包内 ``cookies/cookies.txt`` 只作为**只读源**；
+* 真正交给 yt-dlp 的 ``cookiefile`` 指向可写状态目录 ``.state/cookies.work.txt``；
+* ``.state/`` 既不入库（.gitignore）也不进 .app（build_app.sh 排除）。
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,14 +38,41 @@ APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_COOKIE_FILE = APP_DIR / "cookies" / "cookies.txt"
 
 
+def state_dir() -> Path:
+    """可写状态目录（不进发布包、不进 git）。"""
+    raw = (os.environ.get("AVD_STATE_DIR") or "").strip()
+    return Path(raw).expanduser() if raw else (APP_DIR / ".state")
+
+
 def cookie_file() -> Path | None:
-    """返回可用的包内 cookie 文件，否则 None。"""
+    """返回可用的包内 cookie **源**文件（只读），否则 None。"""
     raw = (os.environ.get("AVD_COOKIE_FILE") or "").strip()
     candidate = Path(raw).expanduser() if raw else DEFAULT_COOKIE_FILE
     safe = guards.within(APP_DIR, candidate)
     if safe is None:
         return None
     return safe if safe.is_file() else None
+
+
+def writable_cookie_file() -> Path | None:
+    """把包内 Cookie 复制到可写状态目录，返回副本路径。
+
+    副本只在「源比副本新」时刷新，这样用户手工换 Cookie 能生效，
+    而 yt-dlp 的回写不会反过来覆盖包内源文件。
+    """
+    src = cookie_file()
+    if src is None:
+        return None
+    target = state_dir() / "cookies.work.txt"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if (not target.is_file()) or target.stat().st_mtime < src.stat().st_mtime:
+            shutil.copyfile(src, target)
+            os.chmod(target, 0o600)
+    except OSError:
+        # 状态目录不可写时退回只读源（宁可被回写也不要让解析直接失败）
+        return src
+    return target
 
 
 def _ensure_engine() -> None:
@@ -52,7 +89,8 @@ def base_opts(url: str) -> dict[str, Any]:
     """构造一次解析 / 下载所需的完整 yt-dlp 参数。
 
     复用原版 ``_base_opts``（cookie 浏览器、代理、重试、日志），再叠加：
-    包内 cookiefile、官方 extractor 裁剪开关、不校验证书保持 False。
+    可写 Cookie 副本（不污染包内源文件）、官方 extractor 裁剪开关、
+    不校验证书保持 False。
     """
     _ensure_engine()
     from downloader import config, engine  # noqa: WPS433 — 延迟导入避免循环
@@ -60,7 +98,7 @@ def base_opts(url: str) -> dict[str, Any]:
     opts: dict[str, Any] = engine._base_opts(config.as_dict(), url)
     opts["skip_download"] = True
     opts["nocheckcertificate"] = False
-    path = cookie_file()
+    path = writable_cookie_file()
     if path is not None:
         opts["cookiefile"] = str(path)
     allowed = guards.allowed_extractors()
@@ -69,15 +107,32 @@ def base_opts(url: str) -> dict[str, Any]:
     return opts
 
 
+def live_record_seconds(cfg: dict[str, Any] | None = None) -> int:
+    """直播限时录制秒数；0 表示拒绝直播。委托给 engine，避免重复实现。"""
+    _ensure_engine()
+    from downloader import engine  # noqa: WPS433
+    return engine.live_record_seconds(cfg)
+
+
+def apply_live_clip_opts(opts: dict[str, Any], seconds: int) -> dict[str, Any]:
+    """给直播下载加上 ffmpeg 时长上限。"""
+    _ensure_engine()
+    from downloader import engine  # noqa: WPS433
+    return engine.apply_live_clip_opts(opts, seconds)
+
+
 def cookie_status() -> dict[str, Any]:
     """只读状态，供 health / doctor 上报（不回显任何 cookie 内容）。"""
     path = cookie_file()
+    work = writable_cookie_file() if path is not None else None
     _ensure_engine()
     from downloader import config  # noqa: WPS433
     browser = str(config.as_dict().get("cookies_from_browser") or "").strip()
     return {
         "cookie_file": str(path) if path else "",
         "cookie_file_present": path is not None,
+        "cookie_work_file": str(work) if work else "",
+        "cookie_readonly": bool(path and work and path != work),
         "cookies_from_browser": browser,
         "authentication_ready": bool(path or browser),
     }

@@ -24,11 +24,20 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from . import subtitles
 from .config import config
 from .engine import friendly_error, resolve_proxy
+
+try:
+    from fusion.task_store import TERMINAL_STAGES as _TS, TaskRegistry
+    from fusion import persist as _persist
+    TERMINAL_STAGES = tuple(_TS)
+except ImportError:
+    TaskRegistry = None  # type: ignore
+    _persist = None
+    TERMINAL_STAGES = ("done", "error", "cancelled")
 
 APP_DIR = Path(__file__).resolve().parent.parent
 ASR_WORKER = APP_DIR / "tools" / "asr_worker.py"
@@ -68,10 +77,13 @@ MODES = ("auto", "subtitle", "asr")
 ENGINES = ("auto", "mlx", "faster")
 ENGINE_LABELS = {"mlx": "MLX 引擎", "faster": "Faster-Whisper 引擎"}
 
-TERMINAL_STAGES = ("done", "error", "cancelled")
-
 # 抓取音频阶段占总进度的比例，其余留给转写
 FETCH_SHARE = 15.0
+
+
+def _persist_terminal(kind: str, snapshot: dict) -> None:
+    if _persist is not None:
+        _persist.save_task(kind, snapshot)
 
 # 各引擎对应的包目录名，用于「不启动子进程就能判断引擎是否装好」
 _ENGINE_PACKAGES = {"mlx": "mlx_whisper", "faster": "faster_whisper"}
@@ -150,6 +162,10 @@ class AsrTask:
     subtitle_kind: str = ""       # manual（人工） | auto（平台自动生成）
     subtitle_lang: str = ""
     engine_used: str = ""         # 实际跑起来的识别引擎
+    no_speech: bool = False       # DIAG-01：成功但 0 段（VAD 滤掉 / 无人声）
+    degraded: list = field(default_factory=list)  # 降级/告警文案（心跳超时等）
+    queue_position: int = 0
+    queue_eta_seconds: float = 0.0
 
     created_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
@@ -159,23 +175,60 @@ class AsrTask:
 
 
 class AsrManager:
-    """线程安全的转写任务注册表 + 事件总线（与 TaskManager 同构）。"""
+    """转写任务管理：业务逻辑 + 统一 TaskRegistry 总线/持久化。"""
 
     def __init__(self) -> None:
-        self._tasks: dict[str, AsrTask] = {}
         self._segments: dict[str, list[dict]] = {}
-        self._subscribers: dict[str, list[queue.Queue]] = {}
-        self._procs: dict[str, subprocess.Popen] = {}
-        self._lock = threading.RLock()
+        self._procs: dict[str, Any] = {}
+        if TaskRegistry is not None:
+            self._reg: Any = TaskRegistry(
+                kind="asr",
+                to_dict=lambda t: t.to_dict(),
+                queue_size=1024,
+                on_terminal=_persist_terminal,
+            )
+            self._tasks = self._reg._tasks
+            self._lock = self._reg.lock
+            self._restore()
+        else:
+            self._reg = None
+            self._tasks = {}
+            self._lock = threading.RLock()
+            self._subscribers: dict[str, list[queue.Queue]] = {}
+
+    def _restore(self) -> None:
+        if _persist is None:
+            return
+        for row in _persist.load_tasks("asr", limit=80):
+            tid = str(row.get("id") or "")
+            if not tid or tid in self._tasks:
+                continue
+            task = AsrTask(
+                id=tid,
+                source=str(row.get("source") or ""),
+                title=str(row.get("title") or ""),
+                stage=str(row.get("stage") or "done"),
+                percent=float(row.get("percent") or 100.0),
+                message=str(row.get("message") or ""),
+                text=str(row.get("text") or ""),
+                error=str(row.get("error") or ""),
+                created_at=float(row.get("created_at") or time.time()),
+                finished_at=row.get("finished_at"),
+            )
+            self._tasks[tid] = task
 
     # ------------------------------------------------------------------ 查询
 
     def list_tasks(self) -> list[dict]:
+        if self._reg is not None:
+            return self._reg.list_dicts()
         with self._lock:
             tasks = sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
             return [t.to_dict() for t in tasks]
 
     def get_task(self, task_id: str) -> Optional[dict]:
+        if self._reg is not None:
+            return self._reg.get_dict(task_id)
         with self._lock:
             task = self._tasks.get(task_id)
             return task.to_dict() if task else None
@@ -187,23 +240,30 @@ class AsrManager:
     # ------------------------------------------------------------------ 订阅
 
     def subscribe(self, task_id: str) -> queue.Queue:
-        q: queue.Queue = queue.Queue(maxsize=1024)
         with self._lock:
-            self._subscribers.setdefault(task_id, []).append(q)
             task = self._tasks.get(task_id)
             snapshot = task.to_dict() if task else None
             segments = list(self._segments.get(task_id, ())) if task else []
-
+        prelude: list[dict] = []
+        if snapshot is not None and snapshot.get("stage") == "done" and segments:
+            prelude.append({
+                "type": "result",
+                "text": snapshot.get("text", ""),
+                "segments": segments,
+            })
+        if self._reg is not None:
+            return self._reg.bus.subscribe(
+                task_id,
+                snapshot=snapshot,
+                prelude=prelude,
+            )
+        q: queue.Queue = queue.Queue(maxsize=1024)
+        for event in prelude:
+            self._enqueue(q, event)
         if snapshot is not None:
-            # 任务若已结束，先补发完整结果再发快照：
-            # 这样前端收到 done 时数据一定是齐的（避免任务过快完成导致结果丢失）
-            if snapshot.get("stage") == "done" and segments:
-                self._enqueue(q, {
-                    "type": "result",
-                    "text": snapshot.get("text", ""),
-                    "segments": segments,
-                })
             self._enqueue(q, {"type": "task", "task": snapshot})
+        with self._lock:
+            self._subscribers.setdefault(task_id, []).append(q)
         return q
 
     @staticmethod
@@ -214,6 +274,9 @@ class AsrManager:
             pass
 
     def unsubscribe(self, task_id: str, q: queue.Queue) -> None:
+        if self._reg is not None:
+            self._reg.unsubscribe(task_id, q)
+            return
         with self._lock:
             subs = self._subscribers.get(task_id)
             if subs and q in subs:
@@ -222,6 +285,9 @@ class AsrManager:
                 self._subscribers.pop(task_id, None)
 
     def _broadcast(self, task_id: str, event: dict) -> None:
+        if self._reg is not None:
+            self._reg.broadcast(task_id, event)
+            return
         with self._lock:
             subs = list(self._subscribers.get(task_id, ()))
         for q in subs:
@@ -231,6 +297,17 @@ class AsrManager:
                 pass
 
     def _patch(self, task: AsrTask, **fields) -> None:
+        # P1：终态不可逆 —— 已 cancelled/done/error 后丢弃非终态 stage 事件
+        if "stage" in fields:
+            nxt = str(fields["stage"] or "")
+            cur = str(task.stage or "")
+            if cur in TERMINAL_STAGES and nxt not in TERMINAL_STAGES:
+                fields = {k: v for k, v in fields.items() if k != "stage"}
+                if not fields:
+                    return
+        if self._reg is not None:
+            self._reg.patch(task, **fields)
+            return
         with self._lock:
             for key, value in fields.items():
                 if hasattr(task, key):
@@ -252,15 +329,19 @@ class AsrManager:
         language: str = "zh",
         mode: str = "auto",
         engine: str = "auto",
+        ckpt_dir: str = "",
+        resume_task_id: str = "",
     ) -> dict:
-        # 平台字幕不需要本地识别环境，所以「仅用平台字幕」不设这道闸。
-        # 其余模式要跑语音识别，环境缺失时提前拦下来，比跑到一半才报错友好。
-        if mode != "subtitle" and not is_available():
-            raise RuntimeError("语音识别环境未就绪，请先运行一次安装脚本；若视频自带字幕，可把来源改为「仅用平台字幕」")
-
+        # UX-01：auto 模式不在入口硬拦 —— 先尝试平台字幕；真正要转写前再校验环境。
+        # 仅 asr 模式（确定要跑语音）才提前拦，避免白跑。
         # 本地文件没有「平台字幕」这回事，强制走语音识别
         if not is_url:
             mode = "asr"
+        if mode == "asr" and not is_available():
+            raise RuntimeError(
+                "语音识别环境未就绪，请先运行一次安装脚本；"
+                "若视频自带字幕，可把来源改为「仅用平台字幕」"
+            )
 
         task = AsrTask(
             id=uuid.uuid4().hex[:12],
@@ -273,7 +354,12 @@ class AsrManager:
             language=language if language in LANGUAGES else "zh",
             mode=mode if mode in MODES else "auto",
             engine=engine if engine in ENGINES else "auto",
+            # MISC-01：本地/上传任务一开始就标 source_kind，不必等 _fetch_audio
+            source_kind="asr" if not is_url else "",
         )
+        # R4：持久检查点目录 + 流水线 task_id（续跑键），挂在实例上供 worker 读取
+        setattr(task, "ckpt_dir", str(ckpt_dir or "").strip())
+        setattr(task, "resume_task_id", str(resume_task_id or "").strip())
         with self._lock:
             self._tasks[task.id] = task
             self._segments[task.id] = []
@@ -288,7 +374,15 @@ class AsrManager:
             proc = self._procs.get(task_id)
         if not task or task.stage in TERMINAL_STAGES:
             return False
-        if proc is not None and proc.poll() is None:
+        # 先置终态，阻止后续 stage 事件把状态「复活」
+        self._patch(task, stage="cancelled", message="已取消", finished_at=time.time())
+        # 常驻池：只取消本任务；仅持有者才会被 kill
+        try:
+            from . import asr_pool
+            asr_pool.get_pool().request_cancel(task_id)
+        except Exception:
+            pass
+        if isinstance(proc, subprocess.Popen) and proc.poll() is None:
             def _reap(child: subprocess.Popen) -> None:
                 try:
                     child.wait(timeout=3)
@@ -305,7 +399,6 @@ class AsrManager:
                 pass
             threading.Thread(target=_reap, args=(proc,), daemon=True,
                              name=f"avd-asr-reap-{task_id}").start()
-        self._patch(task, stage="cancelled", message="已取消", finished_at=time.time())
         return True
 
     def clear_finished(self) -> int:
@@ -328,13 +421,22 @@ class AsrManager:
                     raise RuntimeError("这个视频没有可用的平台字幕，请改用「自动」或「仅语音识别」")
 
             if not from_subtitle:
+                # UX-01：字幕失败后、真正要转写前再校验环境
+                if not is_available():
+                    raise RuntimeError(
+                        "平台字幕不可用，且语音识别环境未就绪。"
+                        "请运行安装脚本，或将来源改为「仅用平台字幕」后重试有字幕的视频"
+                    )
                 if task.is_url:
                     media = self._fetch_audio(task, work_dir)
                 else:
                     media = Path(task.source).expanduser()
                     if not media.exists():
                         raise RuntimeError("待处理的文件不存在或已被移动")
-                    self._patch(task, stage="decoding", percent=FETCH_SHARE, message="准备音频…")
+                    self._patch(
+                        task, stage="decoding", percent=FETCH_SHARE,
+                        message="准备音频…", source_kind="asr",
+                    )
 
                 self._run_worker(task, media, work_dir)
 
@@ -343,14 +445,20 @@ class AsrManager:
                 with self._lock:
                     segments = list(self._segments.get(task.id, ()))
                     text = "".join(s["text"] for s in segments).strip()
-                self._broadcast(task.id, {"type": "result", "text": text, "segments": segments})
+                no_speech = (not from_subtitle) and len(segments) == 0
+                msg = "字幕提取完成" if from_subtitle else (
+                    "素材无人声或语音已被滤掉" if no_speech else "提取完成"
+                )
+                self._broadcast(task.id, {"type": "result", "text": text, "segments": segments,
+                                          "no_speech": no_speech})
                 self._patch(
                     task,
                     stage="done",
                     percent=100.0,
-                    message="字幕提取完成" if from_subtitle else "提取完成",
+                    message=msg,
                     text=text,
                     segment_count=len(segments),
+                    no_speech=no_speech,
                     speed=None,
                     finished_at=time.time(),
                 )
@@ -510,16 +618,134 @@ class AsrManager:
         if python is None:
             raise RuntimeError("语音识别环境未就绪，请先运行一次安装脚本")
 
+        try:
+            from .config import config as _cfg
+            hotwords = _cfg.hotword_list()
+        except Exception:
+            hotwords = []
+        ckpt = str(getattr(task, "ckpt_dir", "") or "").strip()
+        resume_tid = str(getattr(task, "resume_task_id", "") or "").strip() or task.id
         payload = {
             "source": str(media),
             "language": task.language,
             "engine": task.engine,
             "model": "",
             "work_dir": str(work_dir / "asr"),
-            "chunk_seconds": 300,
+            # R4：检查点写到持久目录，取消/崩溃后可续
+            "ckpt_dir": ckpt or str(work_dir / "asr"),
+            "task_id": resume_tid,
+            # 约按音频 10% 一切，短素材也能看到进度（下限 15s，上限 300s）
+            "chunk_seconds": 0,
             "initial_percent": FETCH_SHARE,
+            "hotwords": hotwords,
         }
 
+        # 优先常驻池（模型热复用）；失败则回退一次性进程
+        from . import asr_pool
+        if asr_pool.pool_enabled():
+            pool = asr_pool.get_pool()
+            # 清掉上次残留取消标记
+            pool.clear_cancel(task.id)
+            try:
+                if not pool.ensure(python):
+                    raise RuntimeError("ASR 常驻进程启动失败")
+
+                def _on(ev: dict) -> Optional[str]:
+                    if task.stage in TERMINAL_STAGES:
+                        return "已取消"
+                    return self._handle_event(task, ev)
+
+                def _queued(snap: dict) -> None:
+                    if task.stage in TERMINAL_STAGES:
+                        return
+                    pos = int(snap.get("position") or 0)
+                    eta = float(snap.get("eta_seconds") or 0)
+                    if pos <= 0:
+                        msg = "转写排队中（串行池，请稍候）…"
+                    else:
+                        eta_txt = f"约 {int(eta)} 秒" if eta > 0 else "计算中"
+                        msg = f"转写排队中 · 第 {pos} 位 · 预计等待 {eta_txt}"
+                    self._patch(
+                        task, stage="queued", percent=0.0, message=msg,
+                        queue_position=pos, queue_eta_seconds=eta,
+                    )
+
+                pool.run_job(
+                    payload, _on, task_id=task.id, on_queued=_queued,
+                    audio_duration=float(task.duration or 0),
+                )
+            except asr_pool.JobCancelled:
+                if task.stage not in TERMINAL_STAGES:
+                    self._patch(
+                        task, stage="cancelled", message="已取消",
+                        finished_at=time.time(),
+                    )
+                return
+            except asr_pool.WorkerHeartbeatError as hb_exc:
+                if task.stage in TERMINAL_STAGES:
+                    return
+                note = getattr(hb_exc, "degraded", None) or str(hb_exc)
+                deg = list(task.degraded or [])
+                if note not in deg:
+                    deg.append(note)
+                try:
+                    self._dump_asr_fail(task.id, pool)
+                except Exception:
+                    pass
+                self._patch(task, degraded=deg, message=note)
+                self._broadcast(task.id, {
+                    "type": "log",
+                    "message": f"{note}；将回退冷启动重试",
+                })
+                # 回退 oneshot（池已重启）；不直接失败
+            except Exception as pool_exc:  # noqa: BLE001
+                if task.stage in TERMINAL_STAGES:
+                    return
+                try:
+                    self._dump_asr_fail(task.id, pool)
+                except Exception:
+                    pass
+                try:
+                    pool.kill()
+                except Exception:
+                    pass
+                self._broadcast(task.id, {
+                    "type": "log",
+                    "message": f"常驻 ASR 池不可用，回退冷启动：{pool_exc}",
+                })
+            else:
+                if task.stage in TERMINAL_STAGES:
+                    return
+                return
+            finally:
+                pool.clear_cancel(task.id)
+
+        if task.stage in TERMINAL_STAGES:
+            return
+        self._run_worker_oneshot(task, python, payload)
+
+    def _dump_asr_fail(self, task_id: str, pool: Any) -> None:
+        """P2：失败时落完整 stderr 尾，便于复盘。"""
+        import time as _time
+        log_dir = APP_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / f"asr-fail-{task_id}.log"
+        lines = list(getattr(pool, "_stderr_tail", []) or [])
+        header = [
+            f"task_id={task_id}",
+            f"time={_time.strftime('%Y-%m-%dT%H:%M:%S')}",
+            f"pool_ready={getattr(pool, '_ready', None)}",
+            f"pool_alive={bool(getattr(pool, '_proc', None) and getattr(pool._proc, 'poll', lambda: 0)() is None)}",
+        ]
+        last_ev = getattr(pool, "_last_event", None)
+        if last_ev is not None:
+            header.append(f"last_event={last_ev!r}"[:500])
+        if not lines:
+            header.append("note=worker 未产生 stderr（环形缓冲为空）")
+        body = "\n".join(header + ["--- stderr ---"] + lines) + "\n"
+        path.write_text(body, encoding="utf-8")
+
+    def _run_worker_oneshot(self, task: AsrTask, python: Path, payload: dict) -> None:
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
         env.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -539,7 +765,6 @@ class AsrManager:
         with self._lock:
             self._procs[task.id] = proc
 
-        # stderr 单独抽干，避免缓冲区写满后子进程卡死
         stderr_tail: list[str] = []
 
         def drain() -> None:
@@ -589,6 +814,8 @@ class AsrManager:
                 except (OSError, subprocess.TimeoutExpired):
                     pass
             reader.join(timeout=2)
+            with self._lock:
+                self._procs.pop(task.id, None)
 
         if task.stage in TERMINAL_STAGES:
             return
@@ -623,19 +850,41 @@ class AsrManager:
         if kind == "info":
             engine = str(event.get("engine") or "")
             label = str(event.get("engine_label") or ENGINE_LABELS.get(engine, ""))
-            fields: dict = {"duration": float(event.get("duration") or 0.0)}
+            fields: dict = {}
+            # 只在事件真的带了 duration 时才覆盖：续跑通知这类 info 没有时长，
+            # 旧写法会把已经算好的 duration 冲成 0.0，ETA 与百分比从此失真。
+            try:
+                dur = float(event.get("duration") or 0.0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            if dur > 0:
+                fields["duration"] = dur
             if engine:
                 fields["engine_used"] = engine
-            self._patch(task, **fields)
+            if fields:
+                self._patch(task, **fields)
             if label:
                 self._broadcast(task.id, {"type": "log", "message": f"识别引擎：{label}"})
+            # 续跑通知要能让上层看见（UI 显示「已从 58s 续跑」）
+            if event.get("resume_at") is not None and event.get("message"):
+                self._patch(task, message=str(event["message"]))
+                self._broadcast(task.id, {
+                    "type": "log", "message": str(event["message"]),
+                    "resume_at": event.get("resume_at"),
+                    "resume_chunk": event.get("resume_chunk"),
+                })
             return None
 
         if kind == "progress":
+            msg = event.get("message") or task.message
+            chunk = event.get("chunk")
+            chunks = event.get("chunks")
+            if chunk and chunks:
+                msg = f"转写中 {chunk}/{chunks}"
             self._patch(
                 task,
                 percent=float(event.get("percent") or task.percent),
-                message=event.get("message") or task.message,
+                message=msg,
             )
             return None
 
@@ -654,7 +903,12 @@ class AsrManager:
 
         if kind == "done":
             # 不在这里置终态 —— 交由 _run() 统一判定，保证 done 时数据完整
-            self._patch(task, segment_count=int(event.get("segment_count") or task.segment_count))
+            fields: dict = {
+                "segment_count": int(event.get("segment_count") or task.segment_count),
+            }
+            if event.get("no_speech"):
+                fields["no_speech"] = True
+            self._patch(task, **fields)
             return None
 
         if kind == "error":
