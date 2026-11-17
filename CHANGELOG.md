@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.0.0-r7 · 第十一轮缺陷修复 · 第二批（2026-11-17）
+
+「让可维护成立」：对账、预检、拆分、渲染统一、可观测、前端冒烟。
+
+### 状态与数据
+- **D27**：新增 `PipelineManager.reconcile()` 与 `POST /api/fusion/reconcile`。
+  以产物目录 `manifest.json` 为唯一真相，恢复被清空的内存/索引记录；
+  产物目录已丢失的终态任务标 `state.missing`，不再假装完成。
+- **D25 收尾**：manifest 改为先回填 `files` 再落盘，恢复出的任务带完整产物清单。
+
+### 输入与资源
+- **D28**：上传前置预检（单文件 4 GiB → 扩展名白名单 → MIME 大类 →
+  `.uploads` 配额 → 磁盘余量 512 MiB），不合格在入口即 413/415；
+  新增 `AVD_UPLOAD_QUOTA_BYTES`（默认 20 GiB），README 已记录。
+
+### 结构
+- **D30**：`handle_post` 从 309 行拆成 6 个域 handler + 薄分派器；
+  `_run` 从 497 行拆成采集 / 转写 / 整理 / 渲染 / 收尾 5 个阶段方法。
+  新增 4 个直接调用阶段方法的单测，不再只能靠整条线程链验证。
+- **D31**：单篇与成册已统一走 `fusion/layout.py` 的 `LayoutDoc`；新增
+  3 个 **golden-file 测试**锁定 DOCX `document.xml`、PDF Layout IR 与页码规则。
+
+### 可观测与前端
+- **D29**：流水线 / HTTP 路由的 `except Exception: pass` 全部改为
+  `avd_log.warning` 或 `_degrade`（Cookie、ASR 装配、取消、续跑、双栏、崩溃现场、
+  保留策略）；新增审计测试禁止关键路径再出现静默吞错。
+- **D34**：新增前端关键路径冒烟：每个 `/api` 调用都能在后端找到、
+  zh/en 词典键一致、SSE/启动/取消/导出/问答均接线；并真实起回环服务
+  取首页、`flagship.js`、`/api/fusion/health`。
+
+### 核算
+- **D33**：口径更新为 **31,179 行 / 79 文件**、**303 项用例**；
+  `verify_docs_units.py --assert-current` 全绿。
+
 ## v2.0.0-r6 · 第十一轮缺陷修复 · 第一批（2026-11-17）
 
 按第十一轮全面剖析（D21–D35）先做「让可交付成立」的一批，全部有回归测试。

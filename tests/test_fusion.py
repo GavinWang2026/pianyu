@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -405,6 +407,52 @@ class PipelineTests(unittest.TestCase):
             )
             self.assertEqual(set(snap["files"]), expected_keys, expected_level)
 
+    def test_reconcile_restores_from_manifest_and_marks_missing(self) -> None:
+        """D27：产物目录是真相；内存丢失可恢复，目录丢失要标降级。"""
+        info = dict(SAMPLE_INFO)
+        info["subtitles"] = {
+            "zh-Hans": [{"url": "https://i0.hdslb.com/sub.vtt", "ext": "vtt"}],
+        }
+        mgr = pipeline.PipelineManager(
+            probe_fn=lambda u: dict(info),
+            download_fn=lambda info_, wd: "",
+            subtitle_fn=lambda u, f: list(RICH_SEGMENTS),
+            asr_fn=lambda *a, **k: [],
+            output_root=self.root,
+        )
+        started = mgr.start(
+            "https://www.bilibili.com/video/BV1test", want_download=False)
+        snap = self._wait(mgr, started["id"])
+        self.assertEqual(snap["stage"], "done", snap.get("error"))
+        tid = started["id"]
+        manifest = self.root / tid / "manifest.json"
+        self.assertTrue(manifest.is_file())
+
+        # 模拟「内存与索引都丢了、只剩产物目录」
+        (self.root / "index.json").unlink(missing_ok=True)
+        with mock.patch.object(pipeline.persist, "load_tasks",
+                               lambda *a, **k: []):
+            fresh = pipeline.PipelineManager(
+                probe_fn=lambda u: dict(info),
+                subtitle_fn=lambda u, f: list(RICH_SEGMENTS),
+                asr_fn=lambda *a, **k: [],
+                output_root=self.root,
+            )
+        self.assertIsNone(fresh.get(tid))
+        report = fresh.reconcile()
+        self.assertGreaterEqual(report["restored"], 1, report)
+        restored = fresh.get(tid)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["stage"], "done")
+        self.assertEqual(restored["files"], snap["files"])
+
+        # 产物目录被清理 → 记录保留但标 state.missing
+        shutil.rmtree(self.root / tid)
+        report = fresh.reconcile()
+        self.assertGreaterEqual(report["missing"], 1, report)
+        self.assertTrue(any(d.get("code") == "state.missing"
+                            for d in fresh.get(tid)["degraded_items"]))
+
     def test_persist_failure_marked_degraded_and_health(self) -> None:
         """D25：落库失败不得静默——任务标降级、健康检查可见、错误进日志。"""
         from fusion import persist
@@ -755,6 +803,63 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(st["mode"], "bundled-offline")
         self.assertTrue(st["offline_capable"])
         self.assertEqual(st["engine"], "faster")
+
+
+class StageMethodTests(unittest.TestCase):
+    """D30：阶段级测试，直接调用拆分后的方法，不依赖整条线程链。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        from fusion import persist
+        persist.reset_for_tests(self.root / "stage.sqlite3")
+        self.mgr = pipeline.PipelineManager(output_root=self.root)
+
+    def tearDown(self) -> None:
+        from fusion import persist
+        persist.reset_for_tests(None)
+        self.tmp.cleanup()
+
+    def test_prepare_source_local_copies_and_writes_info(self) -> None:
+        src = self.root / "input.m4a"
+        src.write_bytes(b"fake-audio")
+        task = pipeline.PipelineTask(id="stage01", url="", local_media=str(src))
+        work = self.root / "stage01"
+        work.mkdir()
+        info, meta, is_local = self.mgr._prepare_source(task, work)
+        self.assertTrue(is_local)
+        self.assertTrue(meta.get("local_file"))
+        self.assertTrue((work / "input.m4a").is_file())
+        self.assertTrue((work / "info.json").is_file())
+        self.assertEqual(task.media_path, str(work / "input.m4a"))
+        self.assertEqual(info.get("extractor_key"), "local")
+
+    def test_polish_marks_low_content_level_c(self) -> None:
+        task = pipeline.PipelineTask(id="stage02", url="u")
+        task.segments = [{"start": 0.0, "end": 1.0, "text": "嗯"}]
+        meta = knowledge.meta_from_info({"id": "x", "title": "t"})
+        low = self.mgr._polish_and_annotate(task, meta)
+        self.assertTrue(low)
+        self.assertEqual(meta.get("content_level"), "C")
+        self.assertEqual([d["code"] for d in task.degradations], ["content.low"])
+
+    def test_render_knowledge_crops_artifacts_for_low_content(self) -> None:
+        task = pipeline.PipelineTask(id="stage03", url="u")
+        task.segments = [{"start": 0.0, "end": 1.0, "text": "短"}]
+        meta = knowledge.meta_from_info({"id": "x", "title": "t"})
+        work = self.root / "stage03"
+        work.mkdir()
+        bundle, saved = self.mgr._render_knowledge(task, {}, meta, True, work)
+        self.assertEqual(set(bundle), {"md", "srt", "json"})
+        self.assertEqual(set(saved), {"md", "srt", "json"})
+        self.assertTrue((work / "manifest.json").is_file())
+
+    def test_finish_task_marks_done(self) -> None:
+        task = pipeline.PipelineTask(id="stage04", url="u")
+        with mock.patch.object(pipeline, "resolve_obsidian_dir", return_value=None):
+            self.mgr._finish_task(task, {"title": "t"}, {}, {})
+        self.assertEqual(task.stage, "done")
+        self.assertEqual(task.percent, 100.0)
 
 
 class EngineLockTests(unittest.TestCase):

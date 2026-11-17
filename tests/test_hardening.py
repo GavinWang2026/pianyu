@@ -28,6 +28,7 @@ os.environ.setdefault(
 )
 
 import importlib.util
+import re
 
 from fusion import avd_log, diagnostics, engine_opts, guards, hardening  # noqa: E402
 
@@ -270,6 +271,55 @@ class ServerHardeningTests(unittest.TestCase):
                 os.environ["AVD_TOKEN"] = old
 
 
+class UploadPreflightTests(unittest.TestCase):
+    """D28：类型 / 配额 / 磁盘余量在入口拦截，而不是跑到转写阶段才报错。"""
+
+    def setUp(self) -> None:
+        from fusion import boot_check
+        boot_check.activate()
+        import server
+        self.server = server
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig_dir = server.UPLOAD_DIR
+        self.orig_quota = server.UPLOAD_QUOTA_BYTES
+        server.UPLOAD_DIR = Path(self.tmp.name)
+        (server.UPLOAD_DIR / "old.bin").write_bytes(b"x" * 100)
+
+    def tearDown(self) -> None:
+        self.server.UPLOAD_DIR = self.orig_dir
+        self.server.UPLOAD_QUOTA_BYTES = self.orig_quota
+        self.tmp.cleanup()
+
+    def test_rejects_non_media_extension_and_spoofed_mime(self) -> None:
+        reason = self.server.upload_preflight(10, "notes.txt", "text/plain")
+        self.assertIn("不支持的文件类型", reason or "")
+        reason = self.server.upload_preflight(10, "fake.mp4", "text/plain")
+        self.assertIn("不是音视频", reason or "")
+
+    def test_accepts_audio_and_video(self) -> None:
+        self.assertIsNone(
+            self.server.upload_preflight(1024, "talk.m4a", "audio/mp4"))
+        self.assertIsNone(
+            self.server.upload_preflight(1024, "clip.mp4", "video/mp4"))
+        self.assertIsNone(
+            self.server.upload_preflight(1024, "raw.mov", "application/octet-stream"))
+
+    def test_rejects_over_quota(self) -> None:
+        self.server.UPLOAD_QUOTA_BYTES = 200
+        reason = self.server.upload_preflight(150, "a.mp4", "video/mp4")
+        self.assertIn("配额不足", reason or "")
+
+    def test_rejects_when_disk_reserve_missing(self) -> None:
+        from types import SimpleNamespace
+        orig = self.server.shutil.disk_usage
+        self.server.shutil.disk_usage = lambda _p: SimpleNamespace(free=1000)
+        try:
+            reason = self.server.upload_preflight(10, "a.mp4", "video/mp4")
+        finally:
+            self.server.shutil.disk_usage = orig
+        self.assertIn("磁盘空间不足", reason or "")
+
+
 class PackagingContractTests(unittest.TestCase):
     """D23 / D24：交付脚本与文档不得再承诺 Python 3.10。"""
 
@@ -291,6 +341,23 @@ class PackagingContractTests(unittest.TestCase):
     def test_readme_declares_python_311(self) -> None:
         body = (APP_DIR / "README-FLAGSHIP.md").read_text(encoding="utf-8")
         self.assertIn("Python 3.11+", body)
+
+
+class ObservabilityTests(unittest.TestCase):
+    """D29：关键路径（流水线 / HTTP 路由）禁止 `except Exception: pass` 静默吞错。"""
+
+    def test_critical_modules_have_no_silent_broad_except(self) -> None:
+        pattern = re.compile(r"\s*except (Exception|BaseException)( as \w+)?:\s*$")
+        offenders: list[str] = []
+        for rel in ("fusion/pipeline.py", "fusion/api.py"):
+            lines = (APP_DIR / rel).read_text(encoding="utf-8").splitlines()
+            for i, line in enumerate(lines[:-1]):
+                if pattern.match(line) and re.match(r"\s*pass\s*$", lines[i + 1]):
+                    offenders.append(f"{rel}:{i + 1}")
+        self.assertEqual(
+            offenders, [],
+            "关键路径出现了静默 except；请改为 avd_log.warning 或 _degrade 记录原因",
+        )
 
 
 if __name__ == "__main__":

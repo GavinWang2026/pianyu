@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import sys
 import tempfile
 import time
@@ -350,6 +351,76 @@ class DocxDeliveryTests(unittest.TestCase):
             self.assertIn("word/styles.xml", set(zf.namelist()))
             doc_xml = zf.read("word/document.xml").decode("utf-8")
             self.assertIn("Heading", doc_xml)
+
+
+class RenderGoldenTests(unittest.TestCase):
+    """D31：单篇与成册共用一套 LayoutDoc 渲染，并用 golden-file 锁结构。
+
+    golden 只比对 ``word/document.xml``（与 zip 时间戳无关），时间戳统一替换为
+    ``<STAMP>``。PDF 比对 Layout IR 的文本（跨平台稳定），再对字节做打开冒烟。
+    """
+
+    _STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+
+    def _golden(self, name: str) -> str:
+        return (ROOT / "tests" / "golden" / name).read_text(encoding="utf-8")
+
+    def _doc_xml(self, raw: bytes) -> str:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            self.assertIsNone(zf.testzip(), "DOCX zip 完整性校验失败")
+            xml = zf.read("word/document.xml").decode("utf-8")
+        return self._STAMP.sub("<STAMP>", xml)
+
+    def _footer_xml(self, raw: bytes) -> str:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            return zf.read("word/footer1.xml").decode("utf-8")
+
+    def test_single_docx_matches_golden(self) -> None:
+        meta = knowledge.meta_from_info(dict(INFO))
+        raw = knowledge.render_docx(
+            meta, PLAIN_SEGS, summary="摘要一句。", keywords=["索引", "知识管理"])
+        self.assertEqual(self._doc_xml(raw),
+                         self._golden("knowledge_docx_document.xml"))
+
+    def test_booklet_docx_matches_golden_and_shares_style_rules(self) -> None:
+        doc = layout.build_booklet(
+            "验收合集",
+            [{"id": "a", "title": "甲", "body": "第一段。\n第二段。"},
+             {"id": "b", "title": "乙", "body": "另一篇正文。"}],
+            template="delivery", stamp="2026-01-01 00:00",
+        )
+        xml = self._doc_xml(layout.render_docx(doc))
+        self.assertEqual(xml, self._golden("booklet_docx_document.xml"))
+        # 成册：章标题走 Heading1，目录域与 TOC1/TOC2 层级齐全
+        for marker in ('w:pStyle w:val="Heading1"', 'w:pStyle w:val="TOC1"',
+                       'w:pStyle w:val="TOC2"', "TOC \\o"):
+            self.assertIn(marker, xml)
+        footer = self._footer_xml(layout.render_docx(doc))
+        for marker in ("PAGE", "NUMPAGES"):
+            self.assertIn(marker, footer)
+        # 单篇：正文分组走 Heading2，页码规则与成册同源
+        single_raw = knowledge.render_docx(
+            knowledge.meta_from_info(dict(INFO)), PLAIN_SEGS,
+            summary="摘要一句。", keywords=["索引", "知识管理"])
+        self.assertIn('w:pStyle w:val="Heading2"', self._doc_xml(single_raw))
+        single_footer = self._footer_xml(single_raw)
+        for marker in ("PAGE", "NUMPAGES"):
+            self.assertIn(marker, single_footer)
+
+    def test_pdf_uses_same_ir_and_opens(self) -> None:
+        meta = knowledge.meta_from_info(dict(INFO))
+        doc = layout.build_from_knowledge(
+            meta, PLAIN_SEGS, summary="摘要一句。",
+            keywords=["索引", "知识管理"], template="delivery")
+        lines = self._STAMP.sub(
+            "<STAMP>", "\n".join(layout.to_pdf_lines(doc)))
+        self.assertEqual(lines, self._golden("knowledge_pdf_lines.txt"))
+        raw = knowledge.render_pdf(
+            meta, PLAIN_SEGS, summary="摘要一句。", keywords=["索引", "知识管理"])
+        self.assertTrue(raw.startswith(b"%PDF-"))
+        self.assertTrue(raw.rstrip().endswith(b"%%EOF"))
+        self.assertIn(b"/Type /Page", raw)
+        self.assertRegex(raw, rb"/Count \d+")
 
 
 class SecurityHeaderTests(unittest.TestCase):

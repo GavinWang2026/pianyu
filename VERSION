@@ -1,4 +1,4 @@
 2.0.0-flagship
-revision: r6 (2026-11-17, 第十一轮 D21–D35 第一批：A/B/C 产物矩阵测试 / 持久化失败降级+日志+健康检查 / README 与启动器 Python 3.11+ 闸门 / .app 解释器探测与 ASR 承诺收敛 / 工作区垃圾清理与打包白名单 / 文档口径自检 --assert-current / AVD_TOKEN 常量时间比较与威胁模型)
+revision: r7 (2026-11-17, 第十一轮 D21–D35 第二批：状态对账 reconcile / 上传类型配额磁盘预检 / handle_post 与 _run 阶段化拆分 / DOCX-PDF 统一渲染与 golden-file / 静默 except 可观测化 / 前端关键路径冒烟)
 engine: yt-dlp 2026.10.26 (vendored unmodified)
 asr_model: faster-whisper-large-v3-turbo (bundled, MIT)

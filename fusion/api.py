@@ -6,6 +6,7 @@
 原版 700 多行路由一行不改。新增接口：
 
     GET  /api/fusion/health          引擎 / 插件 / ASR / 版本自检
+    POST /api/fusion/reconcile       以产物目录为真相，对账内存/索引/SQLite
     GET  /api/pipeline/tasks         任务列表
     GET  /api/pipeline/status?id=    单任务进度（兼容轮询）
     GET  /api/pipeline/progress?id=  SSE 进度（SSE-01，旗舰版首选）
@@ -217,6 +218,22 @@ def handle_get(handler: Any, route: str, query: dict[str, list[str]]) -> bool:
 
 
 def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
+    """D30：薄分派器；具体逻辑按域拆到下面的小 handler。"""
+    for group in (
+        _post_platform_diagnose,
+        _post_pipeline,
+        _post_library,
+        _post_diagnose_admin,
+        _post_pipeline_tail,
+        _post_storage,
+    ):
+        if group(handler, route, payload):
+            return True
+    return False
+
+
+def _post_platform_diagnose(handler: Any, route: str,
+                            payload: dict[str, Any]) -> bool:
     if route == "/api/platform/diagnose":
         url = str(payload.get("url") or "").strip()
         if not url:
@@ -259,7 +276,11 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
             return True
         handler._ok(**(box.get("result") or {}))
         return True
+    return False
 
+
+def _post_pipeline(handler: Any, route: str,
+                   payload: dict[str, Any]) -> bool:
     if route == "/api/pipeline/start":
         # ARCH-01：默认 want_download=True，兑现「一次解析、全链复用」
         raw_dl = payload.get("want_download", True)
@@ -318,8 +339,8 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
                 try:
                     from . import scheduler as sched_mod
                     batch["schedule"] = sched_mod.resolve_run_at(payload.get("run_at"))
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    batch["schedule_error"] = str(exc)
             handler._ok(**batch)
         return True
 
@@ -386,7 +407,11 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
         else:
             handler._ok(**result)
         return True
+    return False
 
+
+def _post_library(handler: Any, route: str,
+                  payload: dict[str, Any]) -> bool:
     if route == "/api/library/ask":
         from . import library
         q = str(payload.get("q") or payload.get("query") or "").strip()
@@ -446,7 +471,11 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
         else:
             handler._ok(**result)
         return True
+    return False
 
+
+def _post_diagnose_admin(handler: Any, route: str,
+                         payload: dict[str, Any]) -> bool:
     if route == "/api/diagnose/pack":
         from . import diagnose_pack
         task_id = str(payload.get("id") or payload.get("task_id") or "")
@@ -476,7 +505,11 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
         else:
             handler._ok(**result)
         return True
+    return False
 
+
+def _post_pipeline_tail(handler: Any, route: str,
+                        payload: dict[str, Any]) -> bool:
     if route == "/api/pipeline/proofread":
         task_id = str(payload.get("id") or "")
         segments = payload.get("segments")
@@ -514,6 +547,22 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
             handler._ok(task=task)
         return True
 
+    if route == "/api/fusion/reconcile":
+        # D27：以产物目录为真相，恢复丢失的内存记录并标记孤儿记录。
+        from . import pipeline as _pipe
+        try:
+            result = _pipe.manager().reconcile()
+        except Exception as exc:  # noqa: BLE001
+            handler._fail(f"对账失败：{exc}", HTTPStatus.INTERNAL_SERVER_ERROR)
+            return True
+        handler._ok(**result)
+        return True
+
+    return False
+
+
+def _post_storage(handler: Any, route: str,
+                  payload: dict[str, Any]) -> bool:
     if route == "/api/storage/purge":
         from . import persist
         try:
@@ -523,7 +572,6 @@ def handle_post(handler: Any, route: str, payload: dict[str, Any]) -> bool:
         else:
             handler._ok(**result)
         return True
-
     return False
 
 

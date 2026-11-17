@@ -139,6 +139,8 @@ _SPECS: dict[str, Spec] = {
     # —— 落地 ——
     "persist.failed": Spec(
         "major", True, "检查磁盘空间与 outputs 目录权限；本次产物仍在，但历史列表可能缺这条"),
+    "state.missing": Spec(
+        "warn", False, "任务记录仍在，但产物目录已被清理或移动；请从诊断包确认是否需要重跑"),
     "library.index": Spec(
         "warn", True, "重试；或稍后在素材库页重建索引"),
     "obsidian.write": Spec(

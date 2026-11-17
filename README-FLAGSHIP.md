@@ -79,6 +79,13 @@ curl -s -X POST http://127.0.0.1:8760/api/platform/diagnose \
 | `AVD_NO_BROWSER` | 空 | 不开浏览器 |
 | `VD_ASR_FASTER_MODEL` | 包内最大档 | 可切到 tiny 等 |
 | `AVD_ASR_ENGINE` | 离线模式自动 `faster` | `auto / faster` |
+| `AVD_UPLOAD_QUOTA_BYTES` | `21474836480`（20 GiB） | `.uploads` 目录配额；超限返回 413 并提示清理 |
+
+### 上传预检（D28）
+
+拖入本地文件在落盘前依次检查：单文件大小（4 GiB）→ 扩展名白名单（常见音视频）→
+`Content-Type` 大类 → `.uploads` 配额 → 目标磁盘余量（保留 512 MiB）。任一不满足直接
+返回 413 / 415，不会跑到转写阶段才失败。流式落盘，不把整个文件读进内存。
 
 ### 威胁模型（请按此理解 `AVD_TOKEN`）
 

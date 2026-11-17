@@ -580,8 +580,9 @@ def _fetch_subtitle_track(url: str, fmt: str) -> list[dict[str, Any]]:
             cookie_header = "; ".join(f"{c.name}={c.value}" for c in jar)
             if cookie_header:
                 headers["Cookie"] = cookie_header
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Cookie 文件损坏不应阻断字幕抓取，但必须留痕，否则「为什么 403」无从查起
+            avd_log.warning("cookie header skipped", url=url, error=str(exc))
 
     req = Request(url, headers=headers)
     proxy = opts.get("proxy")
@@ -963,8 +964,9 @@ def _asr_via_original(
     try:
         from . import asr_offline  # noqa: WPS433
         asr_offline.configure()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # 装配失败不阻断：转写仍可走用户已装环境，但必须留下可诊断线索
+        avd_log.warning("asr_offline configure failed", error=str(exc))
     empty_meta: dict[str, Any] = {"no_speech": False, "stage": "", "env_ready": asr.is_available()}
     if not asr.is_available():
         empty_meta["stage"] = "env_missing"
@@ -993,8 +995,8 @@ def _asr_via_original(
         if cancel_check and cancel_check():
             try:
                 asr.manager.cancel_task(task_id)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                avd_log.warning("asr cancel failed", task=task_id, error=str(exc))
             # 关键：cancel_task 是**乐观置终态**（立刻把 stage 写成 cancelled），
             # worker 其实还在写检查点。若这里直接返回，调用方马上查「可续跑」
             # 会查到空 —— 用户点重试就从 0 重来，等于取消白取消。
@@ -1009,8 +1011,9 @@ def _asr_via_original(
                         max([0.0] + [float(s.get("end") or 0)
                                      for s in (snap.get("segments") or [])])), 2)
                     meta["resume_chunk"] = int(snap.get("chunk_index") or 0) + 1
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    avd_log.warning("resume checkpoint unreadable",
+                                    task=task_id, error=str(exc))
             return [], meta
         snapshot = asr.manager.get_task(task_id) or {}
         if not snapshot:
@@ -1044,8 +1047,8 @@ def _asr_via_original(
         time.sleep(0.35)
     try:
         asr.manager.cancel_task(task_id)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        avd_log.warning("asr cancel failed on timeout", task=task_id, error=str(exc))
     return [], {**empty_meta, "stage": "timeout"}
 
 
@@ -1168,6 +1171,83 @@ class PipelineManager:
             persist.note_failure(exc, op="index.json")
             avd_log.warning("pipeline index write failed", error=str(exc))
 
+    def reconcile(self) -> dict[str, Any]:
+        """D27：以产物目录为真相，对账内存 / index.json / SQLite。
+
+        - 磁盘有 ``manifest.json``、内存没有 → 重建为已完成任务（历史可恢复）
+        - 内存有条目、产物目录已不存在 → 标 ``state.missing`` 降级，记录不删
+        返回统计供 ``POST /api/fusion/reconcile`` 与诊断包使用。
+        """
+        restored = 0
+        missing = 0
+        scanned = 0
+        root = self.output_root
+        try:
+            dirs = [p for p in root.iterdir() if p.is_dir()]
+        except OSError as exc:
+            avd_log.warning("reconcile scan failed", error=str(exc))
+            dirs = []
+        with self._lock:
+            known = set(self._tasks)
+        for work_dir in dirs:
+            manifest = work_dir / "manifest.json"
+            if work_dir.name in known or not manifest.is_file():
+                continue
+            scanned += 1
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                avd_log.warning("reconcile manifest unreadable",
+                                path=str(manifest), error=str(exc))
+                continue
+            snap = data.get("task") if isinstance(data, dict) else None
+            if not isinstance(snap, dict) or not snap.get("id"):
+                continue
+            tid = str(snap["id"])
+            # manifest 在 knowledge 阶段写入，随后才置 done；只要产物齐全，
+            # 恢复时统一视为已完成（error / cancelled 保持原状）。
+            stage = str(snap.get("stage") or "done")
+            if stage not in TERMINAL:
+                stage = "done"
+            task = PipelineTask(
+                id=tid,
+                url=str(snap.get("url") or ""),
+                stage=stage,
+                percent=float(snap.get("percent") or 100.0),
+                message=str(snap.get("message") or "已从产物目录恢复"),
+                source_kind=str(snap.get("source_kind") or ""),
+                summary=str(snap.get("summary") or ""),
+                keywords=list(snap.get("keywords") or []),
+                files=dict(snap.get("files") or {}),
+                degraded=list(snap.get("degraded") or []),
+                degradations=[dict(d) for d in (snap.get("degraded_items") or [])
+                              if isinstance(d, dict)],
+                error=str(snap.get("error") or ""),
+                created_at=float(snap.get("created_at") or time.time()),
+                finished_at=snap.get("finished_at"),
+            )
+            task.meta["title"] = str(snap.get("title") or "")
+            with self._lock:
+                if tid in self._tasks:
+                    continue
+                self._tasks[tid] = task
+            restored += 1
+
+        with self._lock:
+            tasks = list(self._tasks.values())
+        for task in tasks:
+            if task.stage not in TERMINAL:
+                continue
+            if (root / task.id).is_dir():
+                continue
+            missing += 1
+            if not any(d.get("code") == "state.missing" for d in task.degradations):
+                self._degrade(
+                    task, "state.missing", "产物目录已不存在（可能被清理或移动）")
+        self._persist_index()
+        return {"restored": restored, "missing": missing,
+                "scanned": scanned, "total": len(tasks)}
+
     def _purge_stale(self, *, force: bool = False) -> None:
         """OPS-01：按 TTL 清理过期任务目录；裁剪内存任务表；顺带清持久化过期行。
 
@@ -1187,11 +1267,12 @@ class PipelineManager:
             policy = persist.retention_policy()
             ttl = float(policy.get("ttl_seconds") or ttl)
             persist.apply_retention(outputs_root=self.output_root)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            avd_log.warning("retention policy failed", error=str(exc))
             try:
                 persist.purge_older_than(ttl)
-            except Exception:
-                pass
+            except Exception as exc2:  # noqa: BLE001
+                avd_log.warning("retention fallback purge failed", error=str(exc2))
         if self.output_root.is_dir():
             for child in list(self.output_root.iterdir()):
                 if not child.is_dir():
@@ -1460,8 +1541,8 @@ class PipelineManager:
             try:
                 from downloader import asr as _asr_mod  # noqa: WPS433
                 _asr_mod.manager.cancel_task(asr_id)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                avd_log.warning("asr cancel failed", task=asr_id, error=str(exc))
         return True
 
     def _rehydrate(self, task_id: str) -> "PipelineTask | None":
@@ -1656,8 +1737,8 @@ class PipelineManager:
                 leftover = work_dir / f"{stem_rm}.dual.md"
                 if leftover.is_file():
                     leftover.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            avd_log.warning("dual column render skipped", task=task_id, error=str(exc))
         stem = safe_stem(meta.get("title") or "", fallback=task_id)
         saved: dict[str, str] = {}
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -1763,74 +1844,7 @@ class PipelineManager:
             work_dir.mkdir(parents=True, exist_ok=True)
             self._tick(task)
 
-            is_local = bool(task.local_media and Path(task.local_media).is_file())
-            if is_local:
-                # D11：本地上传 —— 跳过 probe/download/字幕
-                path = Path(task.local_media)
-                self._stage(task, "probe", "本地文件，跳过解析…")
-                info = {
-                    "id": task.id,
-                    "title": (task.meta.get("title") or path.stem or "本地素材"),
-                    "extractor": "local",
-                    "extractor_key": "local",
-                    "webpage_url": "",
-                    "duration": None,
-                    "subtitles": {},
-                }
-                meta = knowledge.meta_from_info(info, "")
-                meta["local_file"] = True
-                task.media_path = str(path)
-                self._set(task, info=info, meta=meta)
-                try:
-                    dest = work_dir / path.name
-                    if path.resolve() != dest.resolve():
-                        import shutil as _shutil
-                        _shutil.copy2(path, dest)
-                        task.media_path = str(dest)
-                except OSError:
-                    pass
-                cues = []
-                self._degrade(task, "subtitle.absent", "本地文件无平台字幕，走语音识别")
-            else:
-                self._stage(task, "probe", "正在解析（全任务仅此一次）…")
-                info = self._probe(task.url)
-                self._tick(task)
-                meta = knowledge.meta_from_info(info, task.url)
-                self._set(task, info=info, meta=meta)
-
-            (work_dir / "info.json").write_text(
-                json.dumps({k: v for k, v in info.items()
-                            if k in ("id", "title", "extractor", "extractor_key", "chapters",
-                                     "duration", "uploader", "upload_date", "webpage_url",
-                                     "tags", "categories", "description", "subtitles")},
-                           ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
-
-            if not is_local and info.get("is_live"):
-                live_secs = engine_opts.live_record_seconds()
-                meta["is_live"] = True
-                meta["live_record_seconds"] = live_secs
-                if live_secs == -1:
-                    self._degrade(
-                        task, "live.continuous",
-                        "检测到直播流：将持续录制直到点「取消」（非平台完整回放页）",
-                    )
-                elif live_secs > 0:
-                    self._degrade(
-                        task, "live.limited",
-                        f"检测到直播流：将限时录制约 {live_secs} 秒片段",
-                    )
-                    if not meta.get("duration"):
-                        meta["duration"] = float(live_secs)
-                self._set(task, meta=meta)
-            elif not is_local and str(info.get("live_status") or "") in ("was_live", "post_live"):
-                self._degrade(
-                    task, "live.replay",
-                    "检测到直播回放（已结束），将按完整时长下载",
-                )
-                meta["was_live"] = True
-                self._set(task, meta=meta)
+            info, meta, is_local = self._prepare_source(task, work_dir)
 
             # ARCH-01：默认下载（本地文件跳过）
             if not is_local and task.want_download:
@@ -1857,334 +1871,12 @@ class PipelineManager:
                                       f"下载阶段跳过：{exc}")
                 self._tick(task)
 
-            # 转写超时：至少 STAGE_TIMEOUT，或按时长 ×3；直播按录制上限放大
-            duration = float(meta.get("duration") or 0) or 0.0
-            if info.get("is_live"):
-                live_secs = engine_opts.live_record_seconds()
-                if live_secs > 0:
-                    duration = max(duration, float(live_secs))
-                elif live_secs == -1:
-                    duration = max(duration, 3600.0)  # 看门狗至少留 1h 量级
-            transcript_timeout = max(STAGE_TIMEOUT["transcript"], duration * 3.0 + 60.0)
-            self._stage(
-                task, "transcript",
-                "正在本地转写…" if is_local else "正在取得文字稿（字幕优先）…",
-                timeout=transcript_timeout,
-            )
-            if is_local:
-                cues = []
-            else:
-                track_url, fmt, kind = _pick_subtitle_track(info, task.language)
-                if track_url:
-                    try:
-                        cues = self._subtitle(track_url, fmt)
-                    except Exception as exc:
-                        cues = []
-                        self._degrade(task, "subtitle.fetch", f"字幕抓取失败：{exc}")
-                else:
-                    cues = []
-            self._tick(task)
-            if cues:
-                task.segments = cues
-                task.source_kind = kind
-            else:
-                if not is_local:
-                    self._degrade(task, "subtitle.absent", "平台未提供字幕")
-                if not task.media_path:
-                    # 先认盘：下载阶段可能已落盘却因后处理异常没回传路径
-                    task.media_path = _existing_media(work_dir)
-                if not task.media_path and not is_local:
-                    self._stage(task, "download",
-                                "字幕不可用，下载音频供转写（复用已解析 info）…")
-                    try:
-                        task.media_path = self._download(info, work_dir)
-                    except Exception as exc:
-                        reuse = _existing_media(work_dir)
-                        if reuse:
-                            task.media_path = reuse
-                            self._degrade(
-                                task, "download.postprocess",
-                                f"音频下载告警：{exc}（媒体已在盘上，转写继续）",
-                            )
-                        else:
-                            self._degrade(task, "media.download",
-                                          f"音频下载失败：{exc}")
-                    self._tick(task)
-                    self._stage(task, "transcript", "正在语音转写…",
-                                timeout=transcript_timeout)
-                audio = has_audio_stream(task.media_path) if task.media_path else None
-                if audio is False:
-                    self._degrade(
-                        task, "media.no_audio",
-                        "该素材不含音轨，无法语音转写（本次仅输出元数据骨架）",
-                    )
-                    cues = []
-                else:
-                    asr_meta: dict[str, Any] = {}
-                    try:
-                        def _on_asr_id(tid: str) -> None:
-                            task.asr_task_id = tid
+            self._obtain_transcript(task, info, meta, is_local, work_dir)
 
-                        def _on_asr_prog(pct: float, msg: str) -> None:
-                            self._set(
-                                task, percent=pct,
-                                message=msg or task.message,
-                            )
+            low_content = self._polish_and_annotate(task, meta)
 
-                        result = self._asr(
-                            task.url, task.language, meta.get("title", ""),
-                            task.media_path,
-                            cancel_check=lambda: self._aborted(task),
-                            on_task_id=_on_asr_id,
-                            on_progress=_on_asr_prog,
-                            deadline=task._stage_deadline,
-                            ckpt_dir=str(work_dir),
-                            resume_task_id=task.id,
-                        )
-                        if isinstance(result, tuple):
-                            cues, asr_meta = result[0], dict(result[1] or {})
-                        else:
-                            cues = list(result or [])
-                    except TypeError:
-                        # 注入的 asr_fn 可能不接受新关键字参数
-                        result = self._asr(task.url, task.language,
-                                           meta.get("title", ""), task.media_path)
-                        if isinstance(result, tuple):
-                            cues, asr_meta = result[0], dict(result[1] or {})
-                        else:
-                            cues = list(result or [])
-                    except Exception as exc:
-                        cues = []
-                        asr_meta = {"stage": "engine_error", "error": str(exc)}
-                        self._degrade(task, "asr.failed",
-                                      f"语音识别调用失败：{exc}")
-                        try:
-                            from . import recovery as _rec
-                            _rec.save_crash_scene(
-                                work_dir, task_id=task.id,
-                                reason="pipeline asr exception", exc=exc,
-                            )
-                        except Exception:
-                            pass
-                    self._tick(task)
-                    if asr_meta.get("stage") == "cancelled" or self._aborted(task):
-                        raise Cancelled()
-                    if cues:
-                        task.segments = cues
-                        task.source_kind = "asr"
-                    else:
-                        if asr_meta.get("no_speech") or asr_meta.get("stage") == "done":
-                            self._degrade(
-                                task, "asr.no_speech",
-                                "这段素材没有人声（或已被 VAD 滤掉），已输出元数据骨架；"
-                                "无需重装模型",
-                            )
-                        elif asr_meta.get("stage") == "env_missing" or asr_meta.get("env_ready") is False:
-                            self._degrade(
-                                task, "asr.env_missing",
-                                "语音识别环境未就绪：运行 python3 doctor.py --repair，"
-                                "或双击 setup-asr.command 安装；本次仅输出元数据骨架",
-                            )
-                        elif asr_meta.get("stage") == "timeout":
-                            self._degrade(
-                                task, "asr.timeout",
-                                "语音识别超时；可换源或重试。本次仅输出元数据骨架",
-                            )
-                        else:
-                            self._degrade(
-                                task, "asr.failed",
-                                "语音识别引擎错误或超时；本次仅输出元数据骨架。"
-                                "若反复失败再检查权重是否预置",
-                            )
-
-            # 素材信息量分级：先判断「这份素材能出什么」，再决定要不要出知识稿
-            try:
-                from . import quality as _quality
-                suff = _quality.content_sufficiency(
-                    task.segments, duration=meta.get("duration"))
-            except Exception:
-                suff = {}
-            low_content = bool(suff) and not suff.get("sufficient", True)
-            if suff:
-                meta["content_level"] = suff.get("level") or ("C" if low_content else "A")
-                meta["content_sufficiency"] = suff
-            if low_content:
-                meta["low_content"] = True
-                self._degrade(
-                    task, "content.low",
-                    suff.get("message") or "信息量不足", prepend=True,
-                )
-                self._set(task, meta=meta)
-                avd_log.warning(
-                    "low content material", task=task.id,
-                    chars=suff.get("chars"), level=suff.get("level"),
-                )
-
-            # D10：正文分段走 polish.local_polish（去重/停顿分段/填充词），再出规则/LLM 摘要
-            if task.segments and not low_content:
-                self._stage(task, "polish", "正在整理正文分段与摘要…")
-                try:
-                    from downloader import polish as _polish
-                    polished = _polish.local_polish(
-                        task.segments, language=task.language or "zh",
-                    )
-                    paras = list(polished.get("paragraphs") or [])
-                    if paras:
-                        meta["paragraphs"] = [
-                            {
-                                "start": p.get("start"),
-                                "end": p.get("end"),
-                                "text": p.get("text"),
-                                "count": p.get("count"),
-                            }
-                            for p in paras
-                        ]
-                        # 回写去重/去填充后的句子，供后续说话人与索引使用
-                        if polished.get("text"):
-                            cleaned_segs = _polish.dedupe_segments(task.segments)
-                            for seg in cleaned_segs:
-                                seg["text"] = _polish.strip_leading_fillers(
-                                    str(seg.get("text") or "")
-                                )
-                                seg["text"] = _polish.normalize_punctuation(
-                                    str(seg.get("text") or ""),
-                                    language=task.language or "zh",
-                                )
-                            task.segments = [
-                                s for s in cleaned_segs if str(s.get("text") or "").strip()
-                            ]
-                except Exception as exc:  # noqa: BLE001
-                    self._degrade(task, "polish.body", f"正文分段跳过：{exc}")
-
-                if task.want_polish:
-                    summary, keywords, src = enrich_summary(task.segments, use_llm=True)
-                    task.summary, task.keywords = summary, keywords
-                    meta["summary_kind"] = src
-                self._set(task, segments=task.segments, meta=meta)
-                self._tick(task)
-
-            # 可选说话人标注（配置 asr_diarize=true；有 pyannote 则神经网络）
-            if task.segments and _diarize_enabled():
-                task.segments = knowledge.assign_speakers(
-                    task.segments,
-                    audio_path=task.media_path or None,
-                )
-                labeled = any(str(s.get("speaker") or "").strip() for s in task.segments)
-                neural = any(
-                    str(s.get("speaker_source") or "") == "pyannote" for s in task.segments
-                )
-                stats = knowledge.speaker_stats(task.segments)
-                meta["speaker_stats"] = stats
-                if labeled:
-                    meta["speakers"] = True
-                    meta["speaker_source"] = "pyannote" if neural else "heuristic"
-                    meta["speaker_confidence"] = stats.get("confidence") or 0
-                    self._set(task, segments=task.segments, meta=meta)
-                    if neural:
-                        self._degrade(task, "speaker.neural",
-                                      "已用 pyannote 神经网络标注说话人")
-                    else:
-                        conf = stats.get("confidence") or 0
-                        self._degrade(
-                            task, "speaker.heuristic",
-                            f"已按停顿启发式标注说话人 A/B（未校准 · 置信 {conf:.2f}；"
-                            "不均衡/停顿不足会自动撤回）",
-                        )
-                else:
-                    self._degrade(
-                        task, "speaker.inconclusive",
-                        "说话人启发式：证据不足或 A/B 不均衡，未写入标签（避免独白误判）",
-                    )
-                    self._set(task, segments=task.segments, meta=meta)
-
-            self._stage(task, "knowledge", "正在生成结构化知识稿…")
-            # 伪章节：平台无 chapters 且有正文时自动分段（含 TF-IDF / LLM 标题）
-            if not (meta.get("chapters") or []) and task.segments and not low_content:
-                auto, title_src = knowledge.synthesize_chapters(task.segments)
-                if auto:
-                    meta["chapters"] = [
-                        {"title": c.title, "start": c.start, "end": c.end} for c in auto
-                    ]
-                    meta["chapters_auto"] = True
-                    meta["chapter_title_source"] = title_src
-                    self._degrade(
-                        task, "chapter.auto",
-                        f"平台未提供章节，已按停顿自动分成 {len(auto)} 段（标注「自动分段」）",
-                    )
-                    self._set(task, meta=meta)
-
-            # 要点 / 术语 / 时间戳索引（规则兜底；有 LLM 时一次调用增强）
-            try:
-                from . import quality
-                if low_content:
-                    # 信息量不足：不出摘要/要点/术语表，只留元数据与转写原文
-                    meta["key_points"] = []
-                    meta["glossary"] = []
-                    meta["insights_source"] = "skipped_low_content"
-                    meta["timestamp_index"] = quality.timestamp_index(task.segments)
-                else:
-                    kp, gloss, src = quality.enrich_insights(task.segments, use_llm=True)
-                    meta["key_points"] = kp
-                    meta["glossary"] = gloss
-                    meta["insights_source"] = src
-                    meta["timestamp_index"] = quality.timestamp_index(task.segments)
-                # 保留 raw_text：校对后仍可双栏
-                for seg in task.segments:
-                    if "raw_text" not in seg:
-                        seg["raw_text"] = str(seg.get("text") or "")
-            except Exception as exc:  # noqa: BLE001
-                self._degrade(task, "insights.error", f"质量增强跳过：{exc}")
-
-            sponsor = knowledge.merge_ranges(
-                knowledge.sponsor_ranges(info),
-                knowledge.heuristic_promo_ranges(task.segments),
-            )
-            if sponsor:
-                self._degrade(
-                    task, "sponsor.removed",
-                    f"已剔除 {len(sponsor)} 段口播/引流（SponsorBlock 字段或启发式话术）",
-                )
-            bundle = knowledge.build_bundle(
-                meta, task.segments, summary=task.summary, keywords=task.keywords,
-                source_kind=task.source_kind, sponsor=sponsor,
-            )
-            # D18：按 content_level 裁剪产物键；D12：未校对无差异时不出 dual
-            level = str(meta.get("content_level") or ("C" if low_content else "A")).upper()
-            if level == "C":
-                keep = {"md", "srt", "json"}
-                bundle = {k: v for k, v in bundle.items() if k in keep}
-            elif level == "B":
-                bundle.pop("dual.md", None)
-            else:
-                try:
-                    from . import quality
-                    if (
-                        meta.get("proofread")
-                        and quality.dual_worth_emitting(task.segments)
-                    ):
-                        bundle["dual.md"] = quality.render_dual_column_md(
-                            meta, task.segments,
-                        )
-                except Exception:
-                    pass
-            stem = safe_stem(meta.get("title") or "", fallback=task.id)
-            saved: dict[str, str] = {}
-            import base64
-            for ext, content in bundle.items():
-                safe_ext = ext.replace("/", ".")
-                rel = f"{task.id}/{stem}.{safe_ext}"
-                path = work_dir / f"{stem}.{safe_ext}"
-                if ext in ("docx", "pdf") or safe_ext in ("docx", "pdf"):
-                    path.write_bytes(base64.b64decode(content.encode("ascii")))
-                else:
-                    path.write_text(content, encoding="utf-8")
-                saved[safe_ext] = rel
-            (work_dir / "manifest.json").write_text(
-                json.dumps({"task": task.to_dict(), "generator": "AVD Flagship v2.0.0",
-                            "engine": "yt-dlp 2026.10.26 (vendored unmodified)"},
-                           ensure_ascii=False, indent=2), encoding="utf-8")
-            self._set(task, files=saved)
-            self._tick(task)
+            bundle, saved = self._render_knowledge(
+                task, info, meta, low_content, work_dir)
 
             # 写入素材库 FTS（供跨任务检索 / 问答）
             try:
@@ -2210,33 +1902,7 @@ class PipelineManager:
             except Exception as exc:  # noqa: BLE001
                 self._degrade(task, "library.index", f"素材库索引跳过：{exc}")
 
-            # 若已配置 Obsidian 目录，完成后自动直写一份 Markdown
-            try:
-                vault = resolve_obsidian_dir()
-                if vault is not None and "md" in bundle:
-                    stem = safe_stem(meta.get("title") or "", fallback=task.id)
-                    obs_path = vault / f"{stem}.md"
-                    if obs_path.exists():
-                        obs_path = vault / f"{stem}-{task.id[:8]}.md"
-                    obs_path.write_text(bundle["md"], encoding="utf-8")
-                    saved["obsidian"] = str(obs_path)
-                    self._set(task, files=saved)
-                    avd_log.info("obsidian auto-write", task=task.id, path=str(obs_path))
-            except Exception as exc:  # noqa: BLE001
-                self._degrade(task, "obsidian.write", f"Obsidian 直写跳过：{exc}")
-
-            keep_media = task.want_download or os.environ.get("AVD_KEEP_MEDIA") == "1"
-            if task.media_path and not keep_media:
-                try:
-                    Path(task.media_path).unlink(missing_ok=True)
-                    task.media_path = ""
-                except OSError:
-                    pass
-
-            self._set(task, stage="done", percent=100.0, message="完成",
-                      finished_at=time.time())
-            avd_log.info("pipeline done", task=task.id, title=meta.get("title", ""),
-                         source=task.source_kind)
+            self._finish_task(task, meta, bundle, saved)
 
         except Cancelled:
             self._mark_cancelled(task)
@@ -2254,6 +1920,453 @@ class PipelineManager:
                       message=diagnostics.friendly(exc), diagnosis=item,
                       percent=100.0, finished_at=time.time())
             avd_log.error("pipeline error", task=task.id, error=str(exc))
+
+    def _polish_and_annotate(self, task: PipelineTask,
+                             meta: dict[str, Any]) -> bool:
+        """D30 整理阶段：信息量分级、正文分段/摘要、可选说话人标注。"""
+        # 素材信息量分级：先判断「这份素材能出什么」，再决定要不要出知识稿
+        try:
+            from . import quality as _quality
+            suff = _quality.content_sufficiency(
+                task.segments, duration=meta.get("duration"))
+        except Exception:
+            suff = {}
+        low_content = bool(suff) and not suff.get("sufficient", True)
+        if suff:
+            meta["content_level"] = suff.get("level") or ("C" if low_content else "A")
+            meta["content_sufficiency"] = suff
+        if low_content:
+            meta["low_content"] = True
+            self._degrade(
+                task, "content.low",
+                suff.get("message") or "信息量不足", prepend=True,
+            )
+            self._set(task, meta=meta)
+            avd_log.warning(
+                "low content material", task=task.id,
+                chars=suff.get("chars"), level=suff.get("level"),
+            )
+
+        # D10：正文分段走 polish.local_polish（去重/停顿分段/填充词），再出规则/LLM 摘要
+        if task.segments and not low_content:
+            self._stage(task, "polish", "正在整理正文分段与摘要…")
+            try:
+                from downloader import polish as _polish
+                polished = _polish.local_polish(
+                    task.segments, language=task.language or "zh",
+                )
+                paras = list(polished.get("paragraphs") or [])
+                if paras:
+                    meta["paragraphs"] = [
+                        {
+                            "start": p.get("start"),
+                            "end": p.get("end"),
+                            "text": p.get("text"),
+                            "count": p.get("count"),
+                        }
+                        for p in paras
+                    ]
+                    # 回写去重/去填充后的句子，供后续说话人与索引使用
+                    if polished.get("text"):
+                        cleaned_segs = _polish.dedupe_segments(task.segments)
+                        for seg in cleaned_segs:
+                            seg["text"] = _polish.strip_leading_fillers(
+                                str(seg.get("text") or "")
+                            )
+                            seg["text"] = _polish.normalize_punctuation(
+                                str(seg.get("text") or ""),
+                                language=task.language or "zh",
+                            )
+                        task.segments = [
+                            s for s in cleaned_segs if str(s.get("text") or "").strip()
+                        ]
+            except Exception as exc:  # noqa: BLE001
+                self._degrade(task, "polish.body", f"正文分段跳过：{exc}")
+
+            if task.want_polish:
+                summary, keywords, src = enrich_summary(task.segments, use_llm=True)
+                task.summary, task.keywords = summary, keywords
+                meta["summary_kind"] = src
+            self._set(task, segments=task.segments, meta=meta)
+            self._tick(task)
+
+        # 可选说话人标注（配置 asr_diarize=true；有 pyannote 则神经网络）
+        if task.segments and _diarize_enabled():
+            task.segments = knowledge.assign_speakers(
+                task.segments,
+                audio_path=task.media_path or None,
+            )
+            labeled = any(str(s.get("speaker") or "").strip() for s in task.segments)
+            neural = any(
+                str(s.get("speaker_source") or "") == "pyannote" for s in task.segments
+            )
+            stats = knowledge.speaker_stats(task.segments)
+            meta["speaker_stats"] = stats
+            if labeled:
+                meta["speakers"] = True
+                meta["speaker_source"] = "pyannote" if neural else "heuristic"
+                meta["speaker_confidence"] = stats.get("confidence") or 0
+                self._set(task, segments=task.segments, meta=meta)
+                if neural:
+                    self._degrade(task, "speaker.neural",
+                                  "已用 pyannote 神经网络标注说话人")
+                else:
+                    conf = stats.get("confidence") or 0
+                    self._degrade(
+                        task, "speaker.heuristic",
+                        f"已按停顿启发式标注说话人 A/B（未校准 · 置信 {conf:.2f}；"
+                        "不均衡/停顿不足会自动撤回）",
+                    )
+            else:
+                self._degrade(
+                    task, "speaker.inconclusive",
+                    "说话人启发式：证据不足或 A/B 不均衡，未写入标签（避免独白误判）",
+                )
+                self._set(task, segments=task.segments, meta=meta)
+        return low_content
+
+    def _render_knowledge(self, task: PipelineTask, info: dict[str, Any],
+                          meta: dict[str, Any], low_content: bool,
+                          work_dir: Path) -> tuple[dict[str, Any], dict[str, str]]:
+        """D30 渲染阶段：章节/要点 → 产物矩阵 → 落盘与 manifest。"""
+        self._stage(task, "knowledge", "正在生成结构化知识稿…")
+        # 伪章节：平台无 chapters 且有正文时自动分段（含 TF-IDF / LLM 标题）
+        if not (meta.get("chapters") or []) and task.segments and not low_content:
+            auto, title_src = knowledge.synthesize_chapters(task.segments)
+            if auto:
+                meta["chapters"] = [
+                    {"title": c.title, "start": c.start, "end": c.end} for c in auto
+                ]
+                meta["chapters_auto"] = True
+                meta["chapter_title_source"] = title_src
+                self._degrade(
+                    task, "chapter.auto",
+                    f"平台未提供章节，已按停顿自动分成 {len(auto)} 段（标注「自动分段」）",
+                )
+                self._set(task, meta=meta)
+
+        # 要点 / 术语 / 时间戳索引（规则兜底；有 LLM 时一次调用增强）
+        try:
+            from . import quality
+            if low_content:
+                # 信息量不足：不出摘要/要点/术语表，只留元数据与转写原文
+                meta["key_points"] = []
+                meta["glossary"] = []
+                meta["insights_source"] = "skipped_low_content"
+                meta["timestamp_index"] = quality.timestamp_index(task.segments)
+            else:
+                kp, gloss, src = quality.enrich_insights(task.segments, use_llm=True)
+                meta["key_points"] = kp
+                meta["glossary"] = gloss
+                meta["insights_source"] = src
+                meta["timestamp_index"] = quality.timestamp_index(task.segments)
+            # 保留 raw_text：校对后仍可双栏
+            for seg in task.segments:
+                if "raw_text" not in seg:
+                    seg["raw_text"] = str(seg.get("text") or "")
+        except Exception as exc:  # noqa: BLE001
+            self._degrade(task, "insights.error", f"质量增强跳过：{exc}")
+
+        sponsor = knowledge.merge_ranges(
+            knowledge.sponsor_ranges(info),
+            knowledge.heuristic_promo_ranges(task.segments),
+        )
+        if sponsor:
+            self._degrade(
+                task, "sponsor.removed",
+                f"已剔除 {len(sponsor)} 段口播/引流（SponsorBlock 字段或启发式话术）",
+            )
+        bundle = knowledge.build_bundle(
+            meta, task.segments, summary=task.summary, keywords=task.keywords,
+            source_kind=task.source_kind, sponsor=sponsor,
+        )
+        # D18：按 content_level 裁剪产物键；D12：未校对无差异时不出 dual
+        level = str(meta.get("content_level") or ("C" if low_content else "A")).upper()
+        if level == "C":
+            keep = {"md", "srt", "json"}
+            bundle = {k: v for k, v in bundle.items() if k in keep}
+        elif level == "B":
+            bundle.pop("dual.md", None)
+        else:
+            try:
+                from . import quality
+                if (
+                    meta.get("proofread")
+                    and quality.dual_worth_emitting(task.segments)
+                ):
+                    bundle["dual.md"] = quality.render_dual_column_md(
+                        meta, task.segments,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._degrade(task, "proofread.dual", f"双栏校对稿跳过：{exc}")
+        stem = safe_stem(meta.get("title") or "", fallback=task.id)
+        saved: dict[str, str] = {}
+        import base64
+        for ext, content in bundle.items():
+            safe_ext = ext.replace("/", ".")
+            rel = f"{task.id}/{stem}.{safe_ext}"
+            path = work_dir / f"{stem}.{safe_ext}"
+            if ext in ("docx", "pdf") or safe_ext in ("docx", "pdf"):
+                path.write_bytes(base64.b64decode(content.encode("ascii")))
+            else:
+                path.write_text(content, encoding="utf-8")
+            saved[safe_ext] = rel
+        # 先回填 files 再写 manifest：manifest 是 D27 对账的唯一真相，
+        # 若先写快照再改 files，恢复出的任务会「已完成但没有产物清单」。
+        self._set(task, files=saved)
+        (work_dir / "manifest.json").write_text(
+            json.dumps({"task": task.to_dict(), "generator": "AVD Flagship v2.0.0",
+                        "engine": "yt-dlp 2026.10.26 (vendored unmodified)"},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        self._tick(task)
+        return bundle, saved
+
+    def _obtain_transcript(self, task: PipelineTask, info: dict[str, Any],
+                           meta: dict[str, Any], is_local: bool,
+                           work_dir: Path) -> None:
+        """D30 转写阶段：字幕优先，缺失时下载音频并走本地 ASR。"""
+        # 转写超时：至少 STAGE_TIMEOUT，或按时长 ×3；直播按录制上限放大
+        duration = float(meta.get("duration") or 0) or 0.0
+        if info.get("is_live"):
+            live_secs = engine_opts.live_record_seconds()
+            if live_secs > 0:
+                duration = max(duration, float(live_secs))
+            elif live_secs == -1:
+                duration = max(duration, 3600.0)  # 看门狗至少留 1h 量级
+        transcript_timeout = max(STAGE_TIMEOUT["transcript"], duration * 3.0 + 60.0)
+        self._stage(
+            task, "transcript",
+            "正在本地转写…" if is_local else "正在取得文字稿（字幕优先）…",
+            timeout=transcript_timeout,
+        )
+        if is_local:
+            cues = []
+        else:
+            track_url, fmt, kind = _pick_subtitle_track(info, task.language)
+            if track_url:
+                try:
+                    cues = self._subtitle(track_url, fmt)
+                except Exception as exc:
+                    cues = []
+                    self._degrade(task, "subtitle.fetch", f"字幕抓取失败：{exc}")
+            else:
+                cues = []
+        self._tick(task)
+        if cues:
+            task.segments = cues
+            task.source_kind = kind
+        else:
+            if not is_local:
+                self._degrade(task, "subtitle.absent", "平台未提供字幕")
+            if not task.media_path:
+                # 先认盘：下载阶段可能已落盘却因后处理异常没回传路径
+                task.media_path = _existing_media(work_dir)
+            if not task.media_path and not is_local:
+                self._stage(task, "download",
+                            "字幕不可用，下载音频供转写（复用已解析 info）…")
+                try:
+                    task.media_path = self._download(info, work_dir)
+                except Exception as exc:
+                    reuse = _existing_media(work_dir)
+                    if reuse:
+                        task.media_path = reuse
+                        self._degrade(
+                            task, "download.postprocess",
+                            f"音频下载告警：{exc}（媒体已在盘上，转写继续）",
+                        )
+                    else:
+                        self._degrade(task, "media.download",
+                                      f"音频下载失败：{exc}")
+                self._tick(task)
+                self._stage(task, "transcript", "正在语音转写…",
+                            timeout=transcript_timeout)
+            audio = has_audio_stream(task.media_path) if task.media_path else None
+            if audio is False:
+                self._degrade(
+                    task, "media.no_audio",
+                    "该素材不含音轨，无法语音转写（本次仅输出元数据骨架）",
+                )
+                cues = []
+            else:
+                asr_meta: dict[str, Any] = {}
+                try:
+                    def _on_asr_id(tid: str) -> None:
+                        task.asr_task_id = tid
+
+                    def _on_asr_prog(pct: float, msg: str) -> None:
+                        self._set(
+                            task, percent=pct,
+                            message=msg or task.message,
+                        )
+
+                    result = self._asr(
+                        task.url, task.language, meta.get("title", ""),
+                        task.media_path,
+                        cancel_check=lambda: self._aborted(task),
+                        on_task_id=_on_asr_id,
+                        on_progress=_on_asr_prog,
+                        deadline=task._stage_deadline,
+                        ckpt_dir=str(work_dir),
+                        resume_task_id=task.id,
+                    )
+                    if isinstance(result, tuple):
+                        cues, asr_meta = result[0], dict(result[1] or {})
+                    else:
+                        cues = list(result or [])
+                except TypeError:
+                    # 注入的 asr_fn 可能不接受新关键字参数
+                    result = self._asr(task.url, task.language,
+                                       meta.get("title", ""), task.media_path)
+                    if isinstance(result, tuple):
+                        cues, asr_meta = result[0], dict(result[1] or {})
+                    else:
+                        cues = list(result or [])
+                except Exception as exc:
+                    cues = []
+                    asr_meta = {"stage": "engine_error", "error": str(exc)}
+                    self._degrade(task, "asr.failed",
+                                  f"语音识别调用失败：{exc}")
+                    try:
+                        from . import recovery as _rec
+                        _rec.save_crash_scene(
+                            work_dir, task_id=task.id,
+                            reason="pipeline asr exception", exc=exc,
+                        )
+                    except Exception as scene_exc:  # noqa: BLE001
+                        avd_log.warning("crash scene save failed", task=task.id,
+                                        error=str(scene_exc))
+                self._tick(task)
+                if asr_meta.get("stage") == "cancelled" or self._aborted(task):
+                    raise Cancelled()
+                if cues:
+                    task.segments = cues
+                    task.source_kind = "asr"
+                else:
+                    if asr_meta.get("no_speech") or asr_meta.get("stage") == "done":
+                        self._degrade(
+                            task, "asr.no_speech",
+                            "这段素材没有人声（或已被 VAD 滤掉），已输出元数据骨架；"
+                            "无需重装模型",
+                        )
+                    elif asr_meta.get("stage") == "env_missing" or asr_meta.get("env_ready") is False:
+                        self._degrade(
+                            task, "asr.env_missing",
+                            "语音识别环境未就绪：运行 python3 doctor.py --repair，"
+                            "或双击 setup-asr.command 安装；本次仅输出元数据骨架",
+                        )
+                    elif asr_meta.get("stage") == "timeout":
+                        self._degrade(
+                            task, "asr.timeout",
+                            "语音识别超时；可换源或重试。本次仅输出元数据骨架",
+                        )
+                    else:
+                        self._degrade(
+                            task, "asr.failed",
+                            "语音识别引擎错误或超时；本次仅输出元数据骨架。"
+                            "若反复失败再检查权重是否预置",
+                        )
+
+    def _prepare_source(self, task: PipelineTask, work_dir: Path
+                        ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """D30 采集阶段：本地文件直接建元信息，远端只做一次解析。"""
+        is_local = bool(task.local_media and Path(task.local_media).is_file())
+        if is_local:
+            # D11：本地上传 —— 跳过 probe/download/字幕
+            path = Path(task.local_media)
+            self._stage(task, "probe", "本地文件，跳过解析…")
+            info = {
+                "id": task.id,
+                "title": (task.meta.get("title") or path.stem or "本地素材"),
+                "extractor": "local",
+                "extractor_key": "local",
+                "webpage_url": "",
+                "duration": None,
+                "subtitles": {},
+            }
+            meta = knowledge.meta_from_info(info, "")
+            meta["local_file"] = True
+            task.media_path = str(path)
+            self._set(task, info=info, meta=meta)
+            try:
+                dest = work_dir / path.name
+                if path.resolve() != dest.resolve():
+                    import shutil as _shutil
+                    _shutil.copy2(path, dest)
+                    task.media_path = str(dest)
+            except OSError:
+                pass
+            self._degrade(task, "subtitle.absent", "本地文件无平台字幕，走语音识别")
+        else:
+            self._stage(task, "probe", "正在解析（全任务仅此一次）…")
+            info = self._probe(task.url)
+            self._tick(task)
+            meta = knowledge.meta_from_info(info, task.url)
+            self._set(task, info=info, meta=meta)
+
+        (work_dir / "info.json").write_text(
+            json.dumps({k: v for k, v in info.items()
+                        if k in ("id", "title", "extractor", "extractor_key", "chapters",
+                                 "duration", "uploader", "upload_date", "webpage_url",
+                                 "tags", "categories", "description", "subtitles")},
+                       ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        if not is_local and info.get("is_live"):
+            live_secs = engine_opts.live_record_seconds()
+            meta["is_live"] = True
+            meta["live_record_seconds"] = live_secs
+            if live_secs == -1:
+                self._degrade(
+                    task, "live.continuous",
+                    "检测到直播流：将持续录制直到点「取消」（非平台完整回放页）",
+                )
+            elif live_secs > 0:
+                self._degrade(
+                    task, "live.limited",
+                    f"检测到直播流：将限时录制约 {live_secs} 秒片段",
+                )
+                if not meta.get("duration"):
+                    meta["duration"] = float(live_secs)
+            self._set(task, meta=meta)
+        elif not is_local and str(info.get("live_status") or "") in ("was_live", "post_live"):
+            self._degrade(
+                task, "live.replay",
+                "检测到直播回放（已结束），将按完整时长下载",
+            )
+            meta["was_live"] = True
+            self._set(task, meta=meta)
+        return info, meta, is_local
+
+    def _finish_task(self, task: PipelineTask, meta: dict[str, Any],
+                     bundle: dict[str, Any], saved: dict[str, str]) -> None:
+        """D30 收尾阶段：可选直写 Obsidian、清理媒体、落 done。"""
+        try:
+            vault = resolve_obsidian_dir()
+            if vault is not None and "md" in bundle:
+                stem = safe_stem(meta.get("title") or "", fallback=task.id)
+                obs_path = vault / f"{stem}.md"
+                if obs_path.exists():
+                    obs_path = vault / f"{stem}-{task.id[:8]}.md"
+                obs_path.write_text(bundle["md"], encoding="utf-8")
+                saved["obsidian"] = str(obs_path)
+                self._set(task, files=saved)
+                avd_log.info("obsidian auto-write", task=task.id, path=str(obs_path))
+        except Exception as exc:  # noqa: BLE001
+            self._degrade(task, "obsidian.write", f"Obsidian 直写跳过：{exc}")
+
+        keep_media = task.want_download or os.environ.get("AVD_KEEP_MEDIA") == "1"
+        if task.media_path and not keep_media:
+            try:
+                Path(task.media_path).unlink(missing_ok=True)
+                task.media_path = ""
+            except OSError:
+                pass
+
+        self._set(task, stage="done", percent=100.0, message="完成",
+                  finished_at=time.time())
+        avd_log.info("pipeline done", task=task.id, title=meta.get("title", ""),
+                     source=task.source_kind)
 
 
 _MANAGER: PipelineManager | None = None

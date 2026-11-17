@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -38,6 +39,48 @@ UPLOAD_DIR = APP_DIR / ".uploads"
 
 # 拖入的本地媒体文件上限（流式落盘，不占内存）
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
+# D28：单文件大小之外再加「类型 + 配额 + 磁盘余量」三道预检。
+# 配额只统计 .uploads，默认 20 GiB，可用 AVD_UPLOAD_QUOTA_BYTES 覆盖。
+UPLOAD_QUOTA_BYTES = int(os.environ.get("AVD_UPLOAD_QUOTA_BYTES") or 20 * 1024 ** 3)
+UPLOAD_RESERVE_BYTES = 512 * 1024 ** 2
+ALLOWED_UPLOAD_EXTS = frozenset({
+    ".mp4", ".mkv", ".mov", ".webm", ".flv", ".avi", ".m4v", ".wmv", ".ts",
+    ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr",
+})
+_UPLOAD_CTYPE_OK = frozenset({"application/octet-stream", ""})
+
+
+def upload_preflight(length: int, filename: str, content_type: str) -> str | None:
+    """上传前置检查：返回拒绝原因，None 表示放行。
+
+    依次检查：大小上限 → 扩展名白名单 → MIME 大类 → 配额 → 磁盘余量。
+    下载器与 ASR 共用，保证「拖错文件」在入口就被拒绝，而不是跑到转写阶段才失败。
+    """
+    if length > MAX_UPLOAD_BYTES:
+        return f"文件过大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        return f"不支持的文件类型：{ext or '无扩展名'}（仅接受常见音视频格式）"
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if ctype not in _UPLOAD_CTYPE_OK and not ctype.startswith(("video/", "audio/")):
+        return f"上传内容不是音视频文件（Content-Type: {ctype or '空'}）"
+    used = 0
+    try:
+        if UPLOAD_DIR.is_dir():
+            used = sum(p.stat().st_size for p in UPLOAD_DIR.iterdir() if p.is_file())
+    except OSError:
+        used = 0
+    if used + length > UPLOAD_QUOTA_BYTES:
+        return (f"上传配额不足：已用 {used // (1024 * 1024)} MB / "
+                f"上限 {UPLOAD_QUOTA_BYTES // (1024 * 1024)} MB，请先清理 .uploads")
+    try:
+        free = shutil.disk_usage(UPLOAD_DIR.parent).free
+    except OSError:
+        free = 0
+    if length + UPLOAD_RESERVE_BYTES > free:
+        return (f"磁盘空间不足：需要 {length // (1024 * 1024)} MB + 512 MB 余量，"
+                f"当前可用 {free // (1024 * 1024)} MB")
+    return None
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -745,9 +788,6 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             self._fail("上传内容为空")
             return
-        if length > MAX_UPLOAD_BYTES:
-            self._fail(f"文件过大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-            return
 
         raw_name = self.headers.get("X-File-Name") or "media"
         try:
@@ -756,6 +796,15 @@ class Handler(BaseHTTPRequestHandler):
             decoded = "media"
         # 只取文件名，剔除任何路径成分，防止目录穿越
         safe_name = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", Path(decoded).name)[:80] or "media"
+
+        reason = upload_preflight(
+            length, safe_name, self.headers.get("Content-Type") or "")
+        if reason:
+            status = (HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                      if reason.startswith(("文件过大", "上传配额", "磁盘空间"))
+                      else HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            self._fail(reason, status)
+            return
 
         try:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -815,9 +864,6 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             self._fail("上传内容为空")
             return
-        if length > MAX_UPLOAD_BYTES:
-            self._fail(f"文件过大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-            return
 
         raw_name = self.headers.get("X-File-Name") or "media"
         try:
@@ -825,6 +871,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             decoded = "media"
         safe_name = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", Path(decoded).name)[:80] or "media"
+
+        reason = upload_preflight(
+            length, safe_name, self.headers.get("Content-Type") or "")
+        if reason:
+            status = (HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                      if reason.startswith(("文件过大", "上传配额", "磁盘空间"))
+                      else HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            self._fail(reason, status)
+            return
 
         try:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

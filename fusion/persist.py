@@ -283,8 +283,13 @@ def retention_policy() -> dict[str, Any]:
         from downloader.config import config as _cfg
         days = int(_cfg.get("task_retain_days") or 7)
         max_gb = float(_cfg.get("outputs_max_gb") or 5)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # 配置读取失败按默认保留策略执行，但留痕，便于排查「保留天数没生效」
+        try:
+            from . import avd_log
+            avd_log.warning("retention config fallback", error=str(exc))
+        except Exception:
+            pass
     days = max(1, min(365, days))
     max_gb = max(0.0, min(500.0, max_gb))
     return {
