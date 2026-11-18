@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,11 @@ from . import guards
 
 APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_COOKIE_FILE = APP_DIR / "cookies" / "cookies.txt"
+# Safari 的 Cookie 库受 macOS TCC 保护；未授权时打开即 EPERM。
+SAFARI_COOKIE_FILE = (
+    Path.home() / "Library" / "Containers" / "com.apple.Safari" / "Data"
+    / "Library" / "Cookies" / "Cookies.binarycookies"
+)
 
 
 def state_dir() -> Path:
@@ -75,6 +81,31 @@ def writable_cookie_file() -> Path | None:
     return target
 
 
+def cookie_browser_issue(
+    browser: str | None = None, cookie_path: Path | None = None,
+) -> dict[str, str]:
+    """检查 ``cookies_from_browser`` 指向的浏览器库是否能读。
+
+    背景（2026-11-18 实测）：用户在设置里选 Safari 后，任何解析都会在
+    yt-dlp 读取 ``Cookies.binarycookies`` 时抛 ``PermissionError``，
+    整条流水线直接失败，公开视频也看不了。这里先探测一次：
+    读不到就返回原因，由调用方**去掉**该来源继续解析（需要登录态的站点
+    会落到 ``COOKIE_STALE`` / ``fresh cookies`` 诊断，比 EPERM 可操作）。
+    """
+    src = (browser or "").strip().lower()
+    if src != "safari" or sys.platform != "darwin":
+        return {}
+    path = cookie_path or SAFARI_COOKIE_FILE
+    if not path.is_file():
+        return {"source": src, "reason": f"找不到 Safari Cookie 库：{path}"}
+    try:
+        with open(path, "rb") as fh:
+            fh.read(8)
+    except OSError as exc:
+        return {"source": src, "reason": str(exc)}
+    return {}
+
+
 def _ensure_engine() -> None:
     """保证内嵌 yt-dlp 已挂到 sys.path（幂等）。
 
@@ -98,6 +129,11 @@ def base_opts(url: str) -> dict[str, Any]:
     opts: dict[str, Any] = engine._base_opts(config.as_dict(), url)
     opts["skip_download"] = True
     opts["nocheckcertificate"] = False
+    # Safari Cookie 库读不到时不要交给 yt-dlp：否则每次解析都会被
+    # PermissionError 打断，连公开视频也无法处理。
+    browser = (opts.get("cookiesfrombrowser") or ("",))[0]
+    if cookie_browser_issue(str(browser)):
+        opts.pop("cookiesfrombrowser", None)
     path = writable_cookie_file()
     if path is not None:
         opts["cookiefile"] = str(path)
@@ -128,11 +164,13 @@ def cookie_status() -> dict[str, Any]:
     _ensure_engine()
     from downloader import config  # noqa: WPS433
     browser = str(config.as_dict().get("cookies_from_browser") or "").strip()
+    issue = cookie_browser_issue(browser)
     return {
         "cookie_file": str(path) if path else "",
         "cookie_file_present": path is not None,
         "cookie_work_file": str(work) if work else "",
         "cookie_readonly": bool(path and work and path != work),
         "cookies_from_browser": browser,
-        "authentication_ready": bool(path or browser),
+        "browser_cookie_unreadable": issue.get("reason", ""),
+        "authentication_ready": bool(path or (browser and not issue)),
     }

@@ -103,6 +103,10 @@ _SPECS: dict[str, Spec] = {
         "note", True, "无需重下：媒体已落盘并直接复用"),
     "download.skip": Spec(
         "warn", True, "检查网络 / Cookie 后重试，或换源"),
+    "cookie.browser_unreadable": Spec(
+        "warn", False,
+        "本次已跳过浏览器 Cookie 继续解析；需要登录态时给小助手/终端开完全磁盘访问，"
+        "或改用 cookies.txt / Chrome 等来源"),
     # —— 字幕 ——
     "subtitle.fetch": Spec(
         "warn", True, "可重试；或把模式切成「仅语音识别」"),

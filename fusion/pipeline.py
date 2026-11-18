@@ -2350,6 +2350,14 @@ class PipelineManager:
                 pass
             self._degrade(task, "subtitle.absent", "本地文件无平台字幕，走语音识别")
         else:
+            issue = engine_opts.cookie_browser_issue(
+                engine_opts.cookie_status().get("cookies_from_browser", ""))
+            if issue:
+                self._degrade(
+                    task, "cookie.browser_unreadable",
+                    f"{issue.get('source', '浏览器')} Cookie 读取被系统拒绝："
+                    f"{issue.get('reason', '')}；本次不携带该来源",
+                )
             self._stage(task, "probe", "正在解析（全任务仅此一次）…")
             info = self._probe(task.url)
             self._tick(task)

@@ -206,8 +206,34 @@ class EngineOptsTests(unittest.TestCase):
     def test_cookie_status_shape(self) -> None:
         status = engine_opts.cookie_status()
         for key in ("cookie_file", "cookie_file_present",
-                    "cookies_from_browser", "authentication_ready"):
+                    "cookies_from_browser", "authentication_ready",
+                    "browser_cookie_unreadable"):
             self.assertIn(key, status)
+
+    def test_unreadable_browser_cookie_is_detected(self) -> None:
+        """Safari Cookie 库被 TCC 拒绝时要给出原因，而不是让解析抛 EPERM。"""
+        import tempfile
+        from unittest import mock
+        with tempfile.NamedTemporaryFile() as fh:
+            path = Path(fh.name)
+            with mock.patch.object(engine_opts.sys, "platform", "darwin"), \
+                 mock.patch("builtins.open",
+                            side_effect=PermissionError(1, "Operation not permitted")):
+                issue = engine_opts.cookie_browser_issue("safari", path)
+        self.assertEqual(issue.get("source"), "safari")
+        self.assertIn("not permitted", issue.get("reason", ""))
+        self.assertEqual(engine_opts.cookie_browser_issue("chrome", path), {})
+
+    def test_unreadable_browser_cookie_is_stripped_from_opts(self) -> None:
+        """探测到读不到时必须摘掉 cookiesfrombrowser，公开素材仍可解析。"""
+        from unittest import mock
+        import downloader.engine as eng
+        with mock.patch.object(engine_opts, "cookie_browser_issue",
+                               return_value={"source": "safari", "reason": "EPERM"}), \
+             mock.patch.object(eng, "_base_opts",
+                               return_value={"cookiesfrombrowser": ("safari",)}):
+            opts = engine_opts.base_opts("https://www.toutiao.com/video/1")
+        self.assertNotIn("cookiesfrombrowser", opts)
 
     def test_cookie_file_is_confined_to_bundle(self) -> None:
         import os  # noqa: WPS433

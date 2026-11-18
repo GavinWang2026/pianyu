@@ -365,7 +365,14 @@
       setProgress(task.percent || 0);
       setStatus((STAGE_LABEL[task.stage] || task.stage) + (task.message ? ' · ' + task.message : ''));
       showDegraded(task);
-      if (task.error) setStatus('失败：' + task.error);
+      if (task.error) {
+        // 优先展示结构化诊断：原始异常（如 Safari Cookie 的 EPERM 路径）
+        // 对用户没有可操作性，只作为兜底。
+        var diag = task.diagnosis || {};
+        var head = diag.title || task.message || task.error;
+        var next = (diag.actions && diag.actions[0]) ? (' · ' + diag.actions[0]) : '';
+        setStatus('失败：' + head + next);
+      }
       var running = ['done', 'error', 'cancelled'].indexOf(task.stage) < 0;
       cancelBtn.disabled = !running;
       if (!running) {

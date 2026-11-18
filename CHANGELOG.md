@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.0-r8.1 · 热修：Safari Cookie 权限导致解析全灭（2026-11-18）
+
+- **现象**：设置里把 Cookie 来源选成 Safari 后，点「解析」必报
+  `[Errno 1] Operation not permitted: '.../Cookies.binarycookies'`，
+  连公开视频也无法处理；错误原文直接顶到状态栏，没有可操作提示。
+- **根因**：macOS 对 Safari Cookie 库有 TCC 保护，未授予「完全磁盘访问」
+  时 yt-dlp 读取即 EPERM；融合层把 `cookiesfrombrowser=('safari',)`
+  原样交给引擎，异常打断整条 probe。
+- **修复**：`engine_opts.cookie_browser_issue()` 先探测可读性；读不到就从
+  yt-dlp 参数里摘掉该来源，公开素材照常解析，需要登录态的站点落到
+  `COOKIE_STALE` / `fresh cookies` 诊断。任务降级项新增
+  `cookie.browser_unreadable`（含授权指引）；`cookie_status()` 增加
+  `browser_cookie_unreadable`，健康检查可见。
+- **前端**：失败状态优先展示 `diagnosis.title` + 第一条动作，原始异常降为兜底。
+- **验证**：用报错原链接 `www.toutiao.com/video/7708747113970156032/`
+  实测，修复后可正常解析（标题 / 353s）；新增 2 项单测，全量 **318 项** 通过。
+
 ## v2.0.0-r8 · 第三批升级 · 让「更值钱」成立（2026-11-17）
 
 ### 长素材理解

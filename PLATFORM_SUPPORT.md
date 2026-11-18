@@ -57,7 +57,9 @@ python3 verify_e2e.py           # 离线全链验收（视频→声音→文字�
 
 macOS 选 Safari 还需给终端「完全磁盘访问权限」（实测本机返回
 `Operation not permitted`，已做成 `COOKIE_PERMISSION` 诊断）。
-`POST /api/platform/diagnose` 会直接告诉你缺什么、去哪儿补。
+r8.1 起读不到时会**自动摘除该 Cookie 来源继续解析**，公开素材不再报错，
+并在任务降级项里提示授权路径；`POST /api/platform/diagnose` 会直接告诉你
+缺什么、去哪儿补。
 
 ## 5. 诚实声明（不要把推断当实测）
 

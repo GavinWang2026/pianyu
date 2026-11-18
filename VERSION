@@ -1,4 +1,4 @@
 2.0.0-flagship
-revision: r8 (2026-11-17, 第三批升级：长素材 map-reduce 分层摘要与覆盖度出处 / 章节质量评估与术语归一 / 素材库问答评测集 / 访谈课程播客会议模板)
+revision: r8.1 (2026-11-18, 热修：Safari Cookie 被 TCC 拒绝时自动摘除该来源并给出可操作降级，公开素材不再被 EPERM 打断)
 engine: yt-dlp 2026.10.26 (vendored unmodified)
 asr_model: faster-whisper-large-v3-turbo (bundled, MIT)
