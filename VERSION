@@ -1,4 +1,4 @@
 2.0.0-flagship
-revision: r8.1 (2026-11-18, 热修：Safari Cookie 被 TCC 拒绝时自动摘除该来源并给出可操作降级，公开素材不再被 EPERM 打断)
+revision: r8.2 (2026-11-18, 热修补丁：Safari Cookie 预检下沉到 downloader/engine 共享层，主页「解析」与融合层同时生效)
 engine: yt-dlp 2026.10.26 (vendored unmodified)
 asr_model: faster-whisper-large-v3-turbo (bundled, MIT)

@@ -214,15 +214,26 @@ class EngineOptsTests(unittest.TestCase):
         """Safari Cookie 库被 TCC 拒绝时要给出原因，而不是让解析抛 EPERM。"""
         import tempfile
         from unittest import mock
+        import downloader.engine as eng
         with tempfile.NamedTemporaryFile() as fh:
             path = Path(fh.name)
-            with mock.patch.object(engine_opts.sys, "platform", "darwin"), \
+            with mock.patch.object(eng.sys, "platform", "darwin"), \
                  mock.patch("builtins.open",
                             side_effect=PermissionError(1, "Operation not permitted")):
                 issue = engine_opts.cookie_browser_issue("safari", path)
         self.assertEqual(issue.get("source"), "safari")
         self.assertIn("not permitted", issue.get("reason", ""))
         self.assertEqual(engine_opts.cookie_browser_issue("chrome", path), {})
+
+    def test_engine_base_opts_skips_unreadable_browser_cookie(self) -> None:
+        """原版 /api/parse 也走 engine._base_opts，同样必须摘掉坏来源。"""
+        from unittest import mock
+        import downloader.engine as eng
+        cfg = {"cookies_from_browser": "safari"}
+        with mock.patch.object(eng, "browser_cookie_issue",
+                               return_value={"source": "safari", "reason": "EPERM"}):
+            opts = eng._base_opts(cfg, "https://www.toutiao.com/video/1")
+        self.assertNotIn("cookiesfrombrowser", opts)
 
     def test_unreadable_browser_cookie_is_stripped_from_opts(self) -> None:
         """探测到读不到时必须摘掉 cookiesfrombrowser，公开素材仍可解析。"""

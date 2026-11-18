@@ -2355,8 +2355,9 @@ class PipelineManager:
             if issue:
                 self._degrade(
                     task, "cookie.browser_unreadable",
-                    f"{issue.get('source', '浏览器')} Cookie 读取被系统拒绝："
-                    f"{issue.get('reason', '')}；本次不携带该来源",
+                    "Safari Cookie 读取被 macOS 拒绝，本次未携带浏览器 Cookie；"
+                    "公开素材不受影响，需要登录态时请给启动器开「完全磁盘访问权限」"
+                    "或改用 cookies.txt",
                 )
             self._stage(task, "probe", "正在解析（全任务仅此一次）…")
             info = self._probe(task.url)

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.0.0-r8.2 · 热修补丁：Safari Cookie 预检下沉到共享层（2026-11-18）
+
+- **原因**：r8.1 的探测只挂在融合层 `engine_opts`，而主页「解析」走
+  `/api/parse` → `downloader/engine.py::_base_opts`，不经过该判断，
+  复测仍报 4 条同类 EPERM。
+- **修复**：`downloader/engine.py` 新增 `SAFARI_COOKIE_FILE` 与
+  `browser_cookie_issue()`，`_base_opts` 在写入 `cookiesfrombrowser` 前先探测；
+  `fusion/engine_opts.py` 改为委托同一实现。两条解析路径共用一份判断。
+- **文案**：流水线降级项不再回显原始 EPERM 路径，只给可操作建议。
+- **验证**：重启服务后 `POST /api/parse` 解析报错原链接返回 `ok`，
+  标题正常 / 353.108s；全量 **319 项** 通过；`verify_docs_units --assert-current` 通过
+  （32,031 行 / 81 文件）。
+
 ## v2.0.0-r8.1 · 热修：Safari Cookie 权限导致解析全灭（2026-11-18）
 
 - **现象**：设置里把 Cookie 来源选成 Safari 后，点「解析」必报
@@ -15,7 +28,7 @@
   `browser_cookie_unreadable`，健康检查可见。
 - **前端**：失败状态优先展示 `diagnosis.title` + 第一条动作，原始异常降为兜底。
 - **验证**：用报错原链接 `www.toutiao.com/video/7708747113970156032/`
-  实测，修复后可正常解析（标题 / 353s）；新增 2 项单测，全量 **318 项** 通过。
+  实测，融合层路径可正常解析（标题 / 353s）；新增 2 项单测，全量 **318 项** 通过。
 
 ## v2.0.0-r8 · 第三批升级 · 让「更值钱」成立（2026-11-17）
 

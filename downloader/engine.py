@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -24,6 +25,36 @@ from urllib.parse import urlparse
 import yt_dlp
 
 from .config import DEFAULT_DOWNLOAD_DIR, DEFAULTS
+
+# Safari 的 Cookie 库受 macOS TCC 保护；未授权时打开即 EPERM。
+SAFARI_COOKIE_FILE = (
+    Path.home() / "Library" / "Containers" / "com.apple.Safari" / "Data"
+    / "Library" / "Cookies" / "Cookies.binarycookies"
+)
+
+
+def browser_cookie_issue(
+    browser: str, cookie_path: Path | None = None,
+) -> dict[str, str]:
+    """检查浏览器 Cookie 库能否读取；读不到返回原因。
+
+    实测（2026-11-18）：设置里选 Safari 后，yt-dlp 读
+    ``Cookies.binarycookies`` 会被 TCC 拒绝（EPERM），原版 ``/api/parse``
+    与融合层流水线都会因此 100% 失败。调用方应在构造 opts 时摘掉该来源，
+    让公开素材继续解析；需要登录态的站点再走 Cookie 过期诊断。
+    """
+    src = (browser or "").strip().lower()
+    if src != "safari" or sys.platform != "darwin":
+        return {}
+    path = cookie_path or SAFARI_COOKIE_FILE
+    if not path.is_file():
+        return {"source": src, "reason": f"找不到 Safari Cookie 库：{path}"}
+    try:
+        with open(path, "rb") as fh:
+            fh.read(8)
+    except OSError as exc:
+        return {"source": src, "reason": str(exc)}
+    return {}
 
 
 class DownloadCancelled(Exception):
@@ -532,7 +563,7 @@ def _base_opts(cfg: dict, url: str, logger=None) -> dict:
     if proxy:
         opts["proxy"] = proxy
     browser = (cfg.get("cookies_from_browser") or "").strip()
-    if browser:
+    if browser and not browser_cookie_issue(browser):
         opts["cookiesfrombrowser"] = (browser,)
     try:
         rate_kb = int(cfg.get("download_rate_kbps") or 0)

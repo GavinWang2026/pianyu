@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +36,6 @@ from . import guards
 
 APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_COOKIE_FILE = APP_DIR / "cookies" / "cookies.txt"
-# Safari 的 Cookie 库受 macOS TCC 保护；未授权时打开即 EPERM。
-SAFARI_COOKIE_FILE = (
-    Path.home() / "Library" / "Containers" / "com.apple.Safari" / "Data"
-    / "Library" / "Cookies" / "Cookies.binarycookies"
-)
 
 
 def state_dir() -> Path:
@@ -86,24 +80,14 @@ def cookie_browser_issue(
 ) -> dict[str, str]:
     """检查 ``cookies_from_browser`` 指向的浏览器库是否能读。
 
-    背景（2026-11-18 实测）：用户在设置里选 Safari 后，任何解析都会在
-    yt-dlp 读取 ``Cookies.binarycookies`` 时抛 ``PermissionError``，
-    整条流水线直接失败，公开视频也看不了。这里先探测一次：
-    读不到就返回原因，由调用方**去掉**该来源继续解析（需要登录态的站点
-    会落到 ``COOKIE_STALE`` / ``fresh cookies`` 诊断，比 EPERM 可操作）。
+    实现下沉到 ``downloader.engine``，让原版 ``/api/parse`` 与融合层流水线
+    共用同一判断，避免「一条路径修了、另一条还报 EPERM」。
     """
-    src = (browser or "").strip().lower()
-    if src != "safari" or sys.platform != "darwin":
+    if not (browser or "").strip():
         return {}
-    path = cookie_path or SAFARI_COOKIE_FILE
-    if not path.is_file():
-        return {"source": src, "reason": f"找不到 Safari Cookie 库：{path}"}
-    try:
-        with open(path, "rb") as fh:
-            fh.read(8)
-    except OSError as exc:
-        return {"source": src, "reason": str(exc)}
-    return {}
+    _ensure_engine()
+    from downloader import engine  # noqa: WPS433 — 延迟导入避免循环
+    return engine.browser_cookie_issue(str(browser), cookie_path)
 
 
 def _ensure_engine() -> None:
