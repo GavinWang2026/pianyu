@@ -47,3 +47,7 @@ __pycache__/
 /.coverage
 /.workbuddy/
 /.trae-html-share-packages/
+
+# 内部资产/许可文档：保留在本机，不随开源仓库发布
+/作者信息
+/内部核查清单-待确认.md
