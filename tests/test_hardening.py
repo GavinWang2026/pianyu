@@ -55,8 +55,11 @@ class ConfigPatchTests(unittest.TestCase):
                 self.assertTrue(why)
 
     def test_rejects_system_download_dirs(self) -> None:
-        for target in ("/", "/etc", "/System/Library", "/Users/<user>/.ssh",
-                       "/Users/<user>/.workbuddy/secrets"):
+        # 凭据类目录按 Path.home() 拼，避免 CI 在 Linux/Windows 上
+        # 因为「/Users/<user> 不是本机 home」而被判成合法路径。
+        home = Path.home()
+        for target in ("/", "/etc", "/System/Library",
+                       str(home / ".ssh"), str(home / ".workbuddy" / "secrets")):
             with self.subTest(target=target):
                 ok, _ = hardening.validate_config_patch({"download_dir": target})
                 self.assertFalse(ok, target)
