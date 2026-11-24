@@ -173,12 +173,11 @@ h1, h2, h3, p { margin: 0; }
 .brand-mark {
   width: 44px; height: 44px;
   display: grid; place-items: center;
-  border-radius: 13px;
-  background: var(--accent-grad);
-  color: #fff;
-  box-shadow: var(--glow);
+  border-radius: 12px;
+  overflow: hidden;
   flex-shrink: 0;
 }
+.brand-mark img { width: 44px; height: 44px; display: block; }
 .brand-mark svg { width: 23px; height: 23px; }
 
 .brand-text h1 {

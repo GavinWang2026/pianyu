@@ -12,18 +12,25 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AVD Flagship</string>
-  <key>CFBundleDisplayName</key><string>AVD Flagship</string>
+  <key>CFBundleName</key><string>片语</string>
+  <key>CFBundleDisplayName</key><string>片语</string>
   <key>CFBundleIdentifier</key><string>com.hyht.avd-flagship</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundleVersion</key><string>2.0.0</string>
   <key>CFBundleShortVersionString</key><string>2.0.0</string>
   <key>CFBundleExecutable</key><string>avd-flagship</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- 壳脚本常驻服务：不进 Dock，避免图标一直弹跳且点了没反应 -->
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST
+
+# 应用图标：由 static/brand/icon.svg 渲染的 AppIcon.icns（1024 基底 + 全尺寸 iconset）
+cp "$ROOT/packaging/macos/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
 # 把源码树复制进 Resources
 # SEC-01：发布包绝不含本机登录态。cookies/ 只保留说明与占位模板，
@@ -50,10 +57,13 @@ rsync -a --delete \
   --include='README.md' --include='README-FLAGSHIP.md' --include='CAPABILITIES.md' \
   --include='NOTICE.md' --include='LICENSE' --include='作者信息' \
   --include='PLATFORM_SUPPORT.md' --include='CHANGELOG.md' --include='VERSION' \
+  --include='SCA-供应链清单.md' --include='CVE-在线扫描报告.md' \
+  --include='CVE-交叉核验记录.md' --include='CVE-PyPI-Advisory核验.md' \
   --include='pyproject.toml' --include='requirements.txt' --include='requirements.lock' \
   --include='config.example.json' \
   --include='setup-asr.command' --include='setup-asr.bat' \
   --include='setup-windows-runtime.bat' \
+  --include='verify_supply_chain.py' --include='sca_report.py' \
   --exclude='*' \
   "$ROOT/" "$CONTENTS/Resources/app/" 2>/dev/null || {
   mkdir -p "$CONTENTS/Resources/app"
@@ -114,29 +124,44 @@ fi
 # 全都找不到时弹原生对话框说明，而不是在终端里静默崩掉。
 cat > "$CONTENTS/MacOS/avd-flagship" <<'LAUNCH'
 #!/usr/bin/env bash
+# Finder 双击入口：单实例 + 立即开浏览器；日志写入 ~/Library/Logs/AVD-Flagship/
+set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../Resources/app" && pwd)"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONUNBUFFERED=1
 cd "$ROOT"
+
+LOG_DIR="${HOME}/Library/Logs/AVD-Flagship"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/launch.log"
+exec > >(tee -a "$LOG") 2>&1
+echo "---- $(date '+%Y-%m-%d %H:%M:%S') launch ----"
+echo "ROOT=$ROOT"
+
+open_ui() {
+  local url="${1:-http://127.0.0.1:8760/}"
+  echo "open $url"
+  open "$url" >/dev/null 2>&1 || true
+}
+
+# 已在跑：直接打开页面，避免 Dock 二次弹跳 / 端口争抢
+if curl -fsS --max-time 1 "http://127.0.0.1:8760/" >/dev/null 2>&1; then
+  open_ui "http://127.0.0.1:8760/"
+  osascript -e 'display notification "服务已在运行，已重新打开工作台" with title "片语"' >/dev/null 2>&1 || true
+  exit 0
+fi
 
 min_ok() { "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null; }
 
 PY=""
-# 1) 随包便携运行时（materialize_runtime.py 装配后位于 runtime/python）
 for cand in "$ROOT/runtime/python/bin/python3" "$ROOT/runtime/python/bin/python" \
-            "$ROOT/runtime/python/python.exe"; do
+            "$HOME/.local/bin/python3.13" "$HOME/.local/bin/python3.12" \
+            "$HOME/.local/bin/python3.11" /opt/homebrew/bin/python3.13 \
+            /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+            /usr/local/bin/python3.13 /usr/local/bin/python3.12 \
+            /usr/local/bin/python3.11; do
   if [ -x "$cand" ] && min_ok "$cand"; then PY="$cand"; break; fi
 done
-# 2) 用户常见安装位置（双击启动时通常不在 PATH）
-if [ -z "$PY" ]; then
-  for cand in "$HOME/.local/bin/python3.13" "$HOME/.local/bin/python3.12" \
-              "$HOME/.local/bin/python3.11" /opt/homebrew/bin/python3.13 \
-              /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
-              /usr/local/bin/python3.13 /usr/local/bin/python3.12 \
-              /usr/local/bin/python3.11; do
-    if [ -x "$cand" ] && min_ok "$cand"; then PY="$cand"; break; fi
-  done
-fi
-# 3) PATH 中的具名二进制（不信任裸 python3，它可能是 3.9）
 if [ -z "$PY" ]; then
   for cand in python3.13 python3.12 python3.11; do
     found="$(command -v "$cand" 2>/dev/null || true)"
@@ -145,14 +170,43 @@ if [ -z "$PY" ]; then
 fi
 
 if [ -z "$PY" ]; then
-  echo "AVD Flagship 需要 Python 3.11+（系统自带的 3.9 无法运行内嵌 yt-dlp 2026.10.26）。" >&2
-  echo "请安装 Python 3.11 或 3.12（python.org 或 Homebrew），然后重新打开本应用。" >&2
-  echo "本地语音识别另需运行 setup-asr.command 准备 .venv-asr 运行时。" >&2
-  osascript -e 'display dialog "AVD Flagship 需要 Python 3.11+。请安装 Python 3.11 或 3.12 后重新打开本应用。语音识别另需运行 setup-asr.command。" buttons {"好"} default button 1 with icon caution' >/dev/null 2>&1 || true
+  osascript -e 'display dialog "片语 需要 Python 3.11+。\n请安装 Python 3.11/3.12 后重试。\n日志：~/Library/Logs/AVD-Flagship/launch.log" buttons {"好"} default button 1 with icon caution' >/dev/null 2>&1 || true
+  exit 1
+fi
+echo "PY=$PY"
+
+# 后台启动服务；启动器自己轮询就绪后开浏览器（Finder 双击无终端）
+# AVD_NO_BROWSER=1：避免 boot.py 再开一次浏览器造成双窗口
+export AVD_NO_BROWSER=1
+"$PY" -u -c "from boot import main; raise SystemExit(main())" "$@" &
+SPID=$!
+echo "server_pid=$SPID"
+
+READY_URL=""
+for _ in $(seq 1 40); do
+  if ! kill -0 "$SPID" 2>/dev/null; then
+    osascript -e "display dialog \"片语 启动失败。\n请查看日志：\n$LOG\" buttons {\"好\"} default button 1 with icon stop" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  for port in $(seq 8760 8799); do
+    if curl -fsS --max-time 0.4 "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
+      READY_URL="http://127.0.0.1:${port}/"
+      break 2
+    fi
+  done
+  sleep 0.25
+done
+
+if [ -z "$READY_URL" ]; then
+  osascript -e "display dialog \"片语 启动超时（未监听端口）。\n日志：\n$LOG\" buttons {\"好\"} default button 1 with icon stop" >/dev/null 2>&1 || true
   exit 1
 fi
 
-exec "$PY" -c "from boot import main; raise SystemExit(main())" "$@"
+open_ui "$READY_URL"
+osascript -e 'display notification "工作台已打开" with title "片语"' >/dev/null 2>&1 || true
+
+# 等服务进程结束（LSUIElement=true，不占 Dock）
+wait "$SPID"
 LAUNCH
 chmod +x "$CONTENTS/MacOS/avd-flagship"
 

@@ -6,8 +6,8 @@
 
   var DICT = {
     zh: {
-      'brand.title': '素材工作台',
-      'brand.sub': '本地提取 · 数据不出机',
+      'brand.title': '片语',
+      'brand.sub': '一条链接，片语成章',
       'fab.open': '旗舰版 · 一键知识稿',
       'flagship.title': '一键生成结构化知识稿',
       'flagship.sub': '一次解析、全链复用：画质 / 字幕轨 / 章节 / 出处一次取回，产出带 front matter 的 Markdown，可直接进知识库。',
@@ -26,8 +26,8 @@
       'lang.toggle': 'EN',
     },
     en: {
-      'brand.title': 'Media Workbench',
-      'brand.sub': 'On-device · data stays local',
+      'brand.title': 'Pianyu',
+      'brand.sub': 'Video in, knowledge out · on-device',
       'fab.open': 'Flagship · One-click notes',
       'flagship.title': 'One-click structured knowledge notes',
       'flagship.sub': 'Parse once, reuse everywhere: quality / captions / chapters / provenance → Markdown ready for your library.',

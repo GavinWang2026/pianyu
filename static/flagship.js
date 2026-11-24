@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Hyht-Team. All rights reserved.
-// See LICENSE (proprietary) and NOTICE.md (third-party components).
+// See LICENSE (MIT) and NOTICE.md (third-party components).
 /* AVD Flagship v2.0.0 — 旗舰版增量界面
    独立注入，不改动原版 index.html / app.js / style.css 的任何既有逻辑。
    提供「一次点击 → 解析 → 字幕/转写 → 整理 → 结构化知识稿」的一条产线。 */
