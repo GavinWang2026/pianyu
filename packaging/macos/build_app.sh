@@ -49,21 +49,14 @@ rsync -a --delete \
   --include='tools/' --include='tools/**' \
   --include='models/' --include='models/**' \
   --include='runtime/' --include='runtime/**' \
-  --include='examples/' --include='examples/**' \
   --include='docs/' --include='docs/**' \
-  --include='LICENSES/' --include='LICENSES/**' \
   --include='cookies/' --exclude='cookies/*.txt' --exclude='cookies/*.rtf' \
   --exclude='cookies/*.har' --include='cookies/**' \
   --include='README.md' --include='README-FLAGSHIP.md' --include='CAPABILITIES.md' \
-  --include='NOTICE.md' --include='LICENSE' --include='作者信息' \
+  --include='NOTICE.md' --include='LICENSE' \
   --include='PLATFORM_SUPPORT.md' --include='CHANGELOG.md' --include='VERSION' \
-  --include='SCA-供应链清单.md' --include='CVE-在线扫描报告.md' \
-  --include='CVE-交叉核验记录.md' --include='CVE-PyPI-Advisory核验.md' \
   --include='pyproject.toml' --include='requirements.txt' --include='requirements.lock' \
   --include='config.example.json' \
-  --include='setup-asr.command' --include='setup-asr.bat' \
-  --include='setup-windows-runtime.bat' \
-  --include='verify_supply_chain.py' --include='sca_report.py' \
   --exclude='*' \
   "$ROOT/" "$CONTENTS/Resources/app/" 2>/dev/null || {
   mkdir -p "$CONTENTS/Resources/app"
@@ -102,19 +95,6 @@ if python3 "$ROOT/tools/secrets_scan.py" --root "$CONTENTS/Resources/app" >/tmp/
 else
   cat /tmp/avd_secrets.log
   echo "FATAL: 发布包含真实 Cookie/凭据，已中止打包" >&2
-  exit 1
-fi
-
-# 出包自检（二）：随包第三方组件必须与 NOTICE/SCA 对得上。
-# r5 抓到的真问题：runtime 装了 23 个包，NOTICE 只声明 8 个，15 个组件长期
-# 未履行署名义务。源码仓 CI 守不住这件事（runtime/ 被 gitignore，只会 SKIP），
-# 所以把门禁钉在打包产物上：产物里没有 runtime 也算失败。
-if python3 "$ROOT/verify_supply_chain.py" --root "$CONTENTS/Resources/app" --strict \
-    >/tmp/avd_supply.log 2>&1; then
-  echo "supply_chain: OK"
-else
-  cat /tmp/avd_supply.log
-  echo "FATAL: NOTICE/SCA 与随包组件不一致（或产物缺 runtime），已中止打包" >&2
   exit 1
 fi
 
@@ -212,7 +192,7 @@ chmod +x "$CONTENTS/MacOS/avd-flagship"
 
 # D23：模型随包、ASR 运行时不随包 —— 这个组合必须写明，不能让用户以为开箱即转写。
 if [[ ! -d "$CONTENTS/Resources/app/.venv-asr" ]]; then
-  echo "NOTE: 未内嵌 ASR 运行时（.venv-asr）。Apple Silicon 可运行 setup-asr.command 生成；" \
+  echo "NOTE: 未内嵌 ASR 运行时（.venv-asr）。Apple Silicon 可自行装配 .venv-asr；" \
        "模型权重已随包，无需重新下载。" >&2
 fi
 

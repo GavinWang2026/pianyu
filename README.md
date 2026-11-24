@@ -79,14 +79,15 @@
 
 ### macOS / Linux
 
-双击 **`一键启动.command`**（或 `start.command`）。
-
-> 首次双击若提示"无法打开"，右键 → 打开，或先在终端执行一次：
-> `chmod +x 一键启动.command`
+```bash
+python3 boot.py
+```
 
 ### Windows
 
-双击 **`一键启动.bat`**（或 `start.bat`）。
+```bat
+python boot.py
+```
 
 首次运行会自动准备运行环境、安装下载引擎，大约需要 10 秒。之后启动在 2 秒内完成。
 
@@ -241,10 +242,6 @@
 
 ```
 Pianyu/
-├── start.command          macOS / Linux 启动脚本
-├── start.bat              Windows 启动脚本
-├── setup-asr.command      文案提取环境安装（macOS / Linux）
-├── setup-asr.bat          文案提取环境安装（Windows）
 ├── app.py                 启动入口（拉起服务 + 打开浏览器）
 ├── server.py              HTTP 服务：路由、JSON API、SSE 进度推流
 ├── downloader/
@@ -256,10 +253,10 @@ Pianyu/
 │   └── polish.py          文案整理：本地规则 + 大模型（OpenAI 兼容）
 ├── tools/
 │   ├── asr_worker.py      转写 worker（跑在独立环境里，双引擎）
-│   └── asr_setup.py       识别模型下载与自检（安装脚本调用）
+│   └── asr_setup.py       识别模型下载与自检
 ├── static/                前端（原生 HTML / CSS / JS）
 ├── downloads/             默认保存目录
-├── .venv-asr/             文案提取的独立环境（跑过安装脚本后出现）
+├── .venv-asr/             文案提取的独立环境（随发布包提供）
 ├── config.json            自动生成，可直接编辑
 └── requirements.txt
 ```
@@ -282,8 +279,8 @@ Pianyu/
 
 语音识别跑在独立环境 `.venv-asr` 里，与下载功能完全隔离。
 
-**安装**：双击 `setup-asr.command`（macOS / Linux）或 `setup-asr.bat`（Windows），只需一次。
-它会按平台自动选好后端、创建环境，并从国内镜像（hf-mirror）拉取模型。
+**准备**：「文案提取」是可选能力。把随发布包提供的 `.venv-asr`（识别运行时）与 `models/`
+（模型权重）放回项目根目录即可启用；源码仓库不包含这两块，其余功能不受影响。
 
 **平台与后端**
 
@@ -297,13 +294,11 @@ Pianyu/
 默认模型都是 `whisper-large-v3-turbo` 档位，中文效果最好的一档之一。
 **全程本地推理，音频不出本机。**
 
-想强制指定后端：
+换模型或自检（已装好 `.venv-asr` 后）：
 
 ```bash
-./setup-asr.command faster     # 或 mlx
+.venv-asr/bin/python tools/asr_setup.py --engine faster   # 或 mlx
 ```
-
-安装脚本是幂等的，随时重跑都可以 —— 已装好的部分会跳过。
 
 > 若只想换模型、不重装依赖，可以直接跑：
 > `.venv-asr/bin/python tools/asr_setup.py --engine mlx --model <仓库名>`
@@ -331,7 +326,7 @@ Pianyu/
 所以同一视频的不同清晰度不会互相覆盖。
 
 **「提取文案」按钮是灰的**
-文案提取环境还没装。双击 `setup-asr.command` / `setup-asr.bat` 装一次即可。
+文案提取环境还没就绪。确认项目根目录下有 `.venv-asr` 与 `models/` 即可启用。
 
 **提取出来是空的 / 不太准**
 先确认视频里确实有人说话 —— 纯音乐、环境音会被自动过滤。
@@ -351,7 +346,7 @@ Pianyu/
 
 **模型下载失败**
 多半是网络。脚本默认走 hf-mirror；想换回官方源：
-`HF_ENDPOINT=https://huggingface.co ./setup-asr.command`
+`HF_ENDPOINT=https://huggingface.co .venv-asr/bin/python tools/asr_setup.py`
 
 ---
 
@@ -368,8 +363,7 @@ Pianyu/
 本项目以 **MIT License** 开源，见 [LICENSE](LICENSE)。
 
 内嵌的 yt-dlp（Unlicense）、语音识别权重（MIT / 上游基座 Apache-2.0）
-以及可选的 ASR 运行时依赖，各自按其原始许可执行，清单见 [NOTICE.md](NOTICE.md)，
-许可全文见 [LICENSES/](LICENSES/)。
+以及可选的 ASR 运行时依赖，各自按其原始许可执行，清单见 [NOTICE.md](NOTICE.md)。
 
 ## 贡献
 
@@ -377,5 +371,5 @@ Pianyu/
 
 1. 不要提交任何真实 Cookie、账号凭据或他人版权内容；
 2. 涉及内嵌 yt-dlp 的改动请走 `yt_dlp_plugins/` 扩展点，不直接改 `vendor/` 下的上游源码；
-3. 提交前跑一遍 `python3 -m unittest discover -s tests -v` 与 `python3 verify_smoke.py`。
+3. 提交前跑一遍 `python3 -m unittest discover -s tests -v`。
 

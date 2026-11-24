@@ -10,12 +10,16 @@
 
 | 类别 | 内容 | 行数（r8.2 实测 2026-11-18） |
 |---|---|---|
-| A 原版自研未改动 | `downloader/`（`__init__` / `subtitles`）、`requirements.txt`、`setup-asr.bat` | 582 |
-| B Hyht-Team 新增 | `fusion/` 29 模块、`tests/` 13 文件、`static/flagship.js` + `flagship.css` + `i18n.js`、`yt_dlp_plugins/` 3 个、`boot.py` / `doctor.py` / `verify_*` / SBOM 与 CVE 脚本 / `cookies/cookie_doctor.py` 共 13 个 | 21,182 |
-| D 原版 + 精确补丁 | `server.py`、`static/index.html`、`static/app.js`、`static/style.css`、`downloader/`（`asr` / `polish` / `tasks` / `config` / `engine` / `runtime_paths`）、`tools/`（`asr_worker` / `asr_setup`）、`start.command` | 10,267 |
+| A 原版自研未改动 | `downloader/`（`__init__` / `subtitles`）、`requirements.txt` | 582 |
+| B Hyht-Team 新增 | `fusion/` 29 模块、`tests/` 回归测试、`static/flagship.js` + `flagship.css` + `i18n.js`、`yt_dlp_plugins/` 3 个、`boot.py` / `doctor.py` / `cookies/cookie_doctor.py` 等 | 21,182 |
+| D 原版 + 精确补丁 | `server.py`、`static/index.html`、`static/app.js`、`static/style.css`、`downloader/`（`asr` / `polish` / `tasks` / `config` / `engine` / `runtime_paths`）、`tools/`（`asr_worker` / `asr_setup`） | 10,267 |
 
 **合计 32,031 行自研源码（4 + 61 + 16 = 81 个文件）。** 判定规则：与首个提交
 `957b362` 逐文件 `git diff` 为空 → A 类；有改动 → D 类；不在该提交内 → B 类。
+
+> **口径说明**：行数与文件数为 r8.2（2026-11-18）快照。开源瘦身删除了 CVE 扫描脚本、
+> `verify_*` 验收脚本、`setup-*` 安装脚本与样例文件，仅减少开发期文件，不改变上表的归属判定。
+
 r5 相对 r3 的变化：`static/app.js`（+292/−5）、`style.css`（+31/−2）、
 `downloader/config.py`（+107/−3）、`engine.py`（+138/−7）、`tools/asr_worker.py`（+491/−50）
 均已有补丁，按 r3 自己的规则从 A 类改归 D 类 —— 这与 r3 把
@@ -41,7 +45,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 > `httpcore` / `idna` / `certifi` 传递依赖，以及 `safetensors` / `regex` / `filelock` /
 > `fsspec` / `PyYAML` / `typing_extensions` / `requests` / `urllib3` /
 > `charset-normalizer`）。**漏声明即 Apache-2.0 §4 与 MIT 署名义务未履行**，
-> 故本节按 `python3 sca_report.py` 的实测结果重列。
+> 故本节按打包产物的实测结果重列。
 
 | 包 | 版本 | 许可（取自包内 `*.dist-info/METADATA`） |
 |---|---|---|
@@ -72,7 +76,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 > 裁剪依据：`tools/asr_worker.py` 转写自有中文语音时的运行期导入探针。
 > `torch`(568M) / `mlx`(211M) / `llvmlite`(125M) / `scipy`(87M) 等未进入发布包。
 > **因此离线包只提供 faster 引擎，MLX 引擎不可用**，这是有意的工程取舍，不是缺陷。
-> 完整来源见 `runtime/MANIFEST.json`；机器可读清单见 `SCA-供应链清单.md`。
+> 完整来源见 `runtime/MANIFEST.json`。
 
 ### 2.3 语音模型权重
 
@@ -87,8 +91,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 **证据链结论（2026-11-12 逐仓核验）**：两份 CT2 转换版权重自身均标 MIT，
 但其上游基座分别标 Apache-2.0（tiny / large-v3）。转换版权重是否同时继承基座
 义务，属法律判断；本包**按最保守口径同时履行 MIT 与 Apache-2.0 义务**：
-`LICENSES/MIT.txt`、`LICENSES/Apache-2.0.txt` 全文随包分发，
-`LICENSES/README.md` 保留来源、版本与变更说明。
+许可全文与来源以上游仓库公布的模型卡与许可证为准，本仓库不重复分发。
 **签大单前仍请许可书面复核**，本包不作法律结论。
 
 ### 2.4 系统依赖（未捆绑）
@@ -107,7 +110,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 |---|---|---|
 | yt-dlp 2026.10.26 源码副本 | `vendor/yt_dlp/` | Unlicense |
 | Python 运行时依赖 | `runtime/site-packages/` | 各自开源许可（见 2.2 表） |
-| 语音识别权重 | `models/` | MIT（上游基座 Apache-2.0，全文见 `LICENSES/`） |
+| 语音识别权重 | `models/` | MIT（上游基座 Apache-2.0） |
 | ffmpeg | 由用户系统提供 | 本仓库未捆绑二进制 |
 
 使用本软件即表示你理解：本工具仅用于处理你**有权访问、有权处理**的内容。
@@ -138,7 +141,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 1. ✅ 模型权重许可核验（MIT / Apache-2.0 均已核到模型卡，不再写「待核验」）；
 2. ✅ 新增 large-v3-turbo 档位：**1.5 GB MIT 权重随包**，默认走大模型，
    中文实测精度明显高于 tiny（「期见版」→「旗舰版」）；
-3. ✅ MIT / Apache-2.0 许可证全文随包 + 来源与变更说明（`LICENSES/`）；
+3. ✅ MIT / Apache-2.0 许可边界与来源已在 NOTICE 中说明；
 4. ✅ 模型权重随包预置，断网转写成立（此前首次运行会因 `HfHubHTTPError` 整块失败）；
 5. ✅ ASR 运行时实体化并列出 **23 个包**各自许可（r5 更正：上一版只列 8 个）；
 6. ✅ 自研边界：`LICENSE`、版权头、git 基线；
@@ -147,7 +150,7 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 9. ✅ 在线漏洞核查双源重跑（r5）：OSV 精确版本查询 **24 个组件 0 命中**、
    历史漏洞 156 条已逐条核验修复点；PyPI Advisory 第二源 **23 个组件 0 条**
    （附 `requests 2.31.0` 阳性对照命中 6 条，证明链路有效）。
-   见 `CVE-在线扫描报告.md` / `CVE-交叉核验记录.md` / `CVE-PyPI-Advisory核验.md`。
+   原始证据与报告保留在本地交付档案中，不随源码仓库分发。
 
 **仍待补齐（本包未代做）**
 

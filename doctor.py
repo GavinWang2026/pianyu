@@ -164,7 +164,7 @@ def check() -> dict[str, Any]:
             "link_target": os.readlink(link) if link.is_symlink() else "(实体目录)",
             "interpreter_usable": bool((ENV / VENV_PY).exists()),
             "native_abi": "cp313-win_amd64（需另装）" if IS_WINDOWS else "cp313-darwin / macOS arm64",
-            "note": ("Windows 需运行 setup-windows-runtime.bat 安装 Win 版依赖；macOS 原生扩展不可复用"
+            "note": ("Windows 需自备 Win 版 ASR 依赖；macOS 原生扩展不可复用"
                      if IS_WINDOWS else
                      "换机器需本机有 Python 3.13；--repair 自动重接解释器"),
         },
@@ -185,7 +185,7 @@ def repair(explicit_src: str | None = None, *, force: bool = False) -> dict[str,
     result: dict[str, Any] = {"changed": False, "steps": [], "error": ""}
     if IS_WINDOWS:
         result["error"] = (
-            "Windows 请用 setup-windows-runtime.bat 创建 Win 版 ASR 运行时："
+            "Windows 请用 Python 3.13 自行创建 Win 版 ASR 运行时："
             "包内 runtime/ 是 cp313-darwin 原生扩展，不能跨平台软链复用"
         )
         result["asr"] = _probe_env()
@@ -205,13 +205,13 @@ def repair(explicit_src: str | None = None, *, force: bool = False) -> dict[str,
 
     pythons = find_python313()
     if not pythons:
-        result["error"] = "本机没有 Python 3.13；请运行 setup-asr.command 安装独立识别环境"
+        result["error"] = "本机没有 Python 3.13；请自行准备独立识别环境（.venv-asr）"
         return result
     site = find_site_source(explicit_src)
     if not site:
         result["error"] = (
             "找不到已装好 faster-whisper / mlx-whisper 的 site-packages；"
-            "用 --asr-src 指向已有 .venv-asr，或运行 setup-asr.command 安装"
+            "用 --asr-src 指向已有 .venv-asr，或自行安装依赖"
         )
         return result
 

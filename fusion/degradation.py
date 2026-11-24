@@ -123,7 +123,7 @@ _SPECS: dict[str, Spec] = {
     "asr.no_speech": Spec(
         "note", False, "无需重装模型：该素材本身无人声"),
     "asr.env_missing": Spec(
-        "block", False, "运行 python3 doctor.py --repair，或双击 setup-asr.command"),
+        "block", False, "运行 python3 doctor.py --repair，或检查 .venv-asr 运行时"),
     "asr.timeout": Spec(
         "major", True, "换源或重试；超长素材建议先切片"),
     # —— 内容 ——

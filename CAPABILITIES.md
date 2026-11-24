@@ -22,7 +22,7 @@
 | 本地上传 | 旗舰面板拖放 / 选文件 → `/api/pipeline/upload` | 需 ASR 环境 | 与 URL 路径共用进度面板 |
 | 产物分级 | C：md/srt/json；B：+docx/pdf；A：校对后 dual | 未校对不出 dual | `content_level` |
 | 界面语言 | 顶栏中英切换（`static/i18n.js`） | 旗舰面板核心文案 | `localStorage avd_lang` |
-| Windows 路径 | `setup-windows-runtime.bat` + 字体候选 + CI 冒烟 | 真机 ASR runtime 另验 | `verify_windows_paths.py` |
+| Windows 路径 | 字体候选 + CI 冒烟 | 真机 ASR runtime 另验 | 需真机自验 |
 | 崩溃现场 | worker/流水线异常写 `asr-crash-*.json` | 不保证跨机器迁移 | 诊断包默认附带；可续跑扫描可见 |
 | 诊断包 | 环境 / 日志 / 失败样本 / 崩溃现场 zip + 工单号 | 不含 Cookie / API Key / 媒体二进制 | `ticket_id` 本地回执；`POST /api/diagnose/submit`（需 `AVD_SUPPORT_URL`，否则 local_only） |
 | 低内容素材 | 字数 < 80 或（段 ≤1 且时长 > 60s）判为 C 级：只出元数据 + 转写原文 | 不生成摘要 / 要点 / 术语表（纯音乐、MV、纯片头本身没有知识点） | 文稿顶部「信息量不足」声明；`low_content` / `content_level` 进任务快照 |
@@ -48,4 +48,4 @@
 1. 仅处理用户有权使用的公开或自有素材。
 2. 白名单站点见 `fusion/guards.py`；可按合同收紧 `AVD_ALLOWED_*`。
 3. 发布包不含客户 Cookie、LLM Key、config 明文密钥。
-4. 第三方组件许可证见 `NOTICE.md` / `LICENSES/`。
+4. 第三方组件许可证见 `NOTICE.md`。

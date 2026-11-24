@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | 主服务 + Web UI + 解析下载 | **3.11+** | ✅ 实测 | ⚠️ 脚本齐备、未真机验证 | ⚠️ 未验证 |
 | 平台字幕转文字稿 | 3.11+ | ✅ 实测 | ⚠️ 未验证 | ⚠️ 未验证 |
-| 本地语音识别（ASR） | **独立 3.13 运行时** | ✅ 实测（faster + 随包 turbo 权重） | ⚠️ 需 `setup-windows-runtime.bat` 装 Win 版依赖 | ⚠️ 需自行装配 |
+| 本地语音识别（ASR） | **独立 3.13 运行时** | ✅ 实测（faster + 随包 turbo 权重） | ⚠️ 需自备 Win 版 ASR 依赖 | ⚠️ 需自行装配 |
 | 离线断网转写 | 同上 | ✅ 实测 6.9s 全链 | ⚠️ 未验证 | ⚠️ 未验证 |
 
 **为什么分两层**：主服务是纯 Python + 标准库 + 内嵌 yt-dlp（也是纯 Python），
@@ -19,8 +19,6 @@
 ## 2. macOS（已实测）
 
 ```bash
-双击 启动旗舰版.command
-# 或
 python3 boot.py
 ```
 
@@ -29,22 +27,20 @@ python3 boot.py
 ```bash
 python3 doctor.py --check       # 体检（含便携性、模型档位、Cookie 通道）
 python3 doctor.py --repair      # 自动重接本机 Python 3.13 解释器
-python3 verify_e2e.py           # 离线全链验收（视频→声音→文字→知识稿）
 ```
 
 `runtime/site-packages/`（161 MB 实体文件）已随包，不依赖外卷；`.venv-asr` 用相对软链。
 
-## 3. Windows（脚本齐备，待真机验收）
+## 3. Windows（需手动装配，待真机验收）
 
 1. 安装 **Python 3.13 x64**（python.org，勾选 Add to PATH）。
-2. 双击 `setup-windows-runtime.bat`：
-   - 用 `py -3.13` 创建 `.venv-asr`（`Scripts\python.exe` + `Lib\site-packages`）；
-   - pip 安装 8 个 Win 版依赖（首次需联网，仅此一次）；
-   - `models/` 里的 CT2 权重是**跨平台**的，直接复用，不用重下 1.5 GB。
-3. 双击 `启动旗舰版.bat`。
+2. 用 `py -3.13` 创建 `.venv-asr`（`Scripts\python.exe` + `Lib\site-packages`），
+   并 pip 安装 faster-whisper / ctranslate2 / av / onnxruntime 等 Win 版依赖（首次需联网，仅此一次）；
+   `models/` 里的 CT2 权重是**跨平台**的，直接复用，不用重下 1.5 GB。
+3. 运行 `python boot.py`。
 
 > **关键限制**：`runtime/site-packages/` 内是 `cp313-darwin` 原生扩展，
-> **不能在 Windows 复用**。`doctor.py --repair` 在 Windows 会明确拒绝软链修复并指向上面脚本，
+> **不能在 Windows 复用**。`doctor.py --repair` 在 Windows 会明确拒绝软链修复并指向上面的装配步骤，
 > 不会静默做错事。版本对齐口径见 `runtime/MANIFEST.json` 与 `NOTICE.md` §2.2。
 
 ## 4. 平台站点 Cookie（抖音 / TikTok 实测）

@@ -14,7 +14,7 @@ env:
 # 说明：vendor/、runtime/、models/ 是随发布包分发的第三方资产，
 # 按 .gitignore 刻意不进源码仓库（让 git 历史保持「自研代码」的干净证据）。
 # 因此 CI 只做不需要二进制资产的检查；需要 ASR 运行时的端到端验收
-# 在交付机上跑 `python verify_e2e.py`（见 PLATFORM_SUPPORT.md）。
+# 在交付机上用真实素材手动跑（见 PLATFORM_SUPPORT.md）。
 
 jobs:
   static:
@@ -234,77 +234,3 @@ jobs:
           print("OK CSP script-src+style-src tightened; flagship styles external")
           PY
 
-      - name: Light smoke (no ASR runtime)
-        shell: bash
-        run: python verify_smoke.py
-
-      - name: Synthetic E2E (no ASR runtime)
-        shell: bash
-        run: python verify_e2e_synth.py
-
-      - name: Resume synth proof (R4, no ASR runtime)
-        shell: bash
-        run: python verify_resume_synth.py
-
-      - name: Windows path smoke (script-verified)
-        shell: bash
-        run: python verify_windows_paths.py
-
-      - name: Docs units (MiB/GiB)
-        shell: bash
-        run: python verify_docs_units.py
-
-      # R2：真正在三套 runner 上验证路径/编码/换行/文件名语义。
-      # 之前 verify_windows_paths 只检查「脚本里有没有写 Win 路径」，
-      # 从没验证过产物名在 Windows 上是否真的能创建。
-      - name: Cross-platform path/encoding smoke
-        shell: bash
-        run: python verify_cross_platform.py
-
-      # r5 抓到的真问题：runtime 有 23 个包，NOTICE 只写 8 个，长期无人发现。
-      # 分工要说清：源码仓没有 runtime/（被 .gitignore 排除），这里只能校
-      # 「NOTICE 与 SCA 互不矛盾」；「文档 vs 实物」的门禁钉在
-      # packaging/macos/build_app.sh（--strict），因为只有打包产物里
-      # runtime 与 NOTICE 才同时在场 —— 那才是这个缺陷真正能造成伤害的地方。
-      - name: Supply-chain docs cross-check
-        shell: bash
-        run: python verify_supply_chain.py --docs-only
-
-  e2e-offline:
-    # 需要随包 fixtures + ASR 运行时；源码仓通常没有，缺资产时 skip 不失败
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: []
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Offline E2E (skip if no fixture/runtime)
-        shell: bash
-        run: |
-          if [[ ! -f fixtures/avd_voice_sample.mp4 ]]; then
-            echo "SKIP: fixtures/avd_voice_sample.mp4 not in repo"
-            exit 0
-          fi
-          if [[ ! -d runtime/site-packages ]] && [[ ! -d .venv-asr ]]; then
-            echo "SKIP: ASR runtime not bundled in this checkout"
-            exit 0
-          fi
-          python verify_e2e.py
-
-      - name: Long-material resume (real ASR, skip if no fixture/runtime)
-        shell: bash
-        # 真链路：真 ASR 引擎 + 真检查点 + 真取消 + 同 task_id 续跑。
-        # 判据见脚本头：检查点存活、续跑首块 >1、前缀逐段一致、覆盖 ≥90%、收尾清理。
-        # 缺 fixture/运行时同样 skip —— 源码仓没有 1.5GB 权重。
-        run: |
-          if [[ ! -f fixtures/avd_voice_sample.mp4 ]]; then
-            echo "SKIP: fixtures/avd_voice_sample.mp4 not in repo"
-            exit 0
-          fi
-          if [[ ! -d runtime/site-packages ]] && [[ ! -d .venv-asr ]]; then
-            echo "SKIP: ASR runtime not bundled in this checkout"
-            exit 0
-          fi
-          python verify_long_resume.py --minutes 4

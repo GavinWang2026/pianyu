@@ -364,20 +364,11 @@ class UploadPreflightTests(unittest.TestCase):
 class PackagingContractTests(unittest.TestCase):
     """D23 / D24：交付脚本与文档不得再承诺 Python 3.10。"""
 
-    def test_macos_launchers_require_311(self) -> None:
-        for name in ("start.command", "启动旗舰版.command", "一键启动.command"):
-            body = (APP_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("(3, 11)", body, name)
-            self.assertNotIn("(3, 10)", body, name)
-            self.assertNotIn("python3.10", body, name)
-            self.assertIn("Python 3.11+", body, name)
-
     def test_app_builder_searches_python_and_states_asr_gap(self) -> None:
         body = (APP_DIR / "packaging/macos/build_app.sh").read_text(encoding="utf-8")
         self.assertIn("3,11", body)
         self.assertNotIn('exec python3 -c', body)
         self.assertIn(".venv-asr", body)
-        self.assertIn("setup-asr.command", body)
 
     def test_readme_declares_python_311(self) -> None:
         body = (APP_DIR / "README-FLAGSHIP.md").read_text(encoding="utf-8")

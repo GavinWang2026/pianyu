@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """文案提取环境的后半程：下载识别模型 + 自检。
 
-由 ``setup-asr.command`` / ``setup-asr.bat`` 在**建好 .venv-asr 并装完依赖之后**调用，
+在**建好 .venv-asr 并装完依赖之后**手动调用，
 必须用 ``.venv-asr`` 里的解释器运行（需要 huggingface_hub 与对应引擎包）。
 
 单独跑也可以，便于排查问题::

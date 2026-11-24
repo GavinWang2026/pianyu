@@ -120,7 +120,7 @@ def main() -> int:
           f"  ({'断网可用' if model['offline_capable'] else '需联网下载'})"
           f"  engine={model['engine']}")
     if not report["asr"].get("available"):
-        fix = ("运行 setup-windows-runtime.bat（安装 Win 版依赖）"
+        fix = ("自行装配 Windows 版 .venv-asr（Python 3.13）"
                if os.name == "nt" else
                "python3 doctor.py --check  然后 --repair")
         print(f"                  修复：{fix}")

@@ -2304,7 +2304,7 @@ class PipelineManager:
                         self._degrade(
                             task, "asr.env_missing",
                             "语音识别环境未就绪：运行 python3 doctor.py --repair，"
-                            "或双击 setup-asr.command 安装；本次仅输出元数据骨架",
+                            "或检查 .venv-asr 运行时；本次仅输出元数据骨架",
                         )
                     elif asr_meta.get("stage") == "timeout":
                         self._degrade(

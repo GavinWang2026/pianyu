@@ -12,19 +12,13 @@
 本地语音识别另需随包的 3.13 独立运行时（`.venv-asr`），不影响主服务启动。
 
 ```bash
-# macOS：双击「启动旗舰版.command」（start.command / 一键启动.command 同指向）
-# Windows：双击「启动旗舰版.bat」；若 ASR 未就绪先跑 setup-windows-runtime.bat
+# macOS / Linux：python3 boot.py
+# Windows：python boot.py；若 ASR 未就绪需自备 Win 版 .venv-asr 运行时
 python3 boot.py                             # 浏览器开 http://127.0.0.1:8760
 
 python3 doctor.py --check                   # 引擎/插件/ffmpeg/模型/ASR/便携性体检
 python3 doctor.py --repair                  # macOS 换机器后自动重接 Python
 python3 -m unittest discover -s tests -v   # 回归，零联网
-python3 verify_smoke.py                    # 轻量冒烟（无需 ASR runtime）
-python3 verify_e2e_synth.py                # 合成字幕轻量 E2E（无 ASR；成册+工单）
-python3 verify_resume_synth.py             # R4 合成续跑实证（检查点 / 崩溃 / 工单 local_only）
-python3 verify_windows_paths.py            # Windows 交付路径冒烟（不要求在 Win 上跑）
-python3 verify_e2e.py                      # 离线全链：视频→声音→文字→知识稿（需 fixture + runtime）
-python3 demo_offline.py                    # 离线样例（虚构数据，仅看形态）
 ```
 
 启动后界面右下角「旗舰版 · 一键知识稿」：粘链接、点一次，一条进度条走完
@@ -42,7 +36,6 @@ python3 demo_offline.py                    # 离线样例（虚构数据，仅�
 | `vendor/yt_dlp` | 内嵌锁定引擎 |
 | `models/` | 离线 ASR 权重（turbo / tiny） |
 | `cookies/` | Cookie 模板与导出指引（不含真实凭据） |
-| `examples/` | 样例知识稿形态 |
 | `tests/` | 单元测试 |
 
 平台支持矩阵见 `PLATFORM_SUPPORT.md`。
@@ -102,7 +95,7 @@ curl -s -X POST http://127.0.0.1:8760/api/platform/diagnose \
 ## 5. 边界（不粉饰）
 
 1. 需登录站点（如部分抖音链路）依赖本机可用 Cookie；无凭据时 diagnose 会明确提示。
-2. Windows 真机需按 `setup-windows-runtime.bat` 自验。
+2. Windows 真机需自备 Win 版 ASR 依赖后自验。
 3. 说话人分离：未装 pyannote 时仅为停顿启发式，且证据不足不标 A/B。
 4. 可称「自主研发的产品 / 自研交互与转写文案工作流」；不可称「全栈自研 / 自研语音识别模型 / 无第三方依赖」。
 5. 上游 yt-dlp `.NO_AI` 政策：本包只读内嵌，不产生上游贡献。
