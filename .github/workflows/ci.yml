@@ -5,6 +5,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Windows runner 的默认控制台编码是 cp1252，脚本里的中文输出会直接
+# UnicodeEncodeError 把作业打红。统一按 UTF-8 跑，三平台行为一致。
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 # 说明：vendor/、runtime/、models/ 是随发布包分发的第三方资产，
 # 按 .gitignore 刻意不进源码仓库（让 git 历史保持「自研代码」的干净证据）。
 # 因此 CI 只做不需要二进制资产的检查；需要 ASR 运行时的端到端验收
@@ -99,9 +105,23 @@ jobs:
 
           # 目录级底线：fusion/ 每个模块都得有测试，不允许 0% 蒙混过关。
           # 实测最低模块约 54%（updates.py），此处只卡「没测」，不卡「测得不够好」。
+          #
+          # 例外：pdf_cjk 依赖系统 CJK 字体，而字体解析器只接受单 face 的
+          # TrueType（TTC 一律跳过）。Linux / Windows runner 自带的 CJK 字体
+          # 基本都是 .ttc，整组用例会被 skip，覆盖率掉到 5% —— 那时卡的是
+          # 「有没有装字体」而不是「有没有写测试」，所以无字体时不卡地板。
           from pathlib import Path
+          try:
+              from fusion.pdf_cjk import find_cjk_font
+              cjk_font_ok = find_cjk_font() is not None
+          except Exception:
+              cjk_font_ok = False
+          print(f"  CJK 字体可用: {cjk_font_ok}")
           for path in sorted(Path("fusion").glob("*.py")):
               rel = f"fusion/{path.name}"
+              if rel == "fusion/pdf_cjk.py" and not cjk_font_ok:
+                  print("  skip floor fusion/pdf_cjk.py（本机无可用 CJK 字体）")
+                  continue
               hit = file_pct(rel)
               if hit is None:
                   continue
