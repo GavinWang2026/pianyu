@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """批量延迟 / 定时调度：把「何时开跑」从 Manager 里拆出来。
 
 不引入 cron 守护进程；每个任务在入队时带 ``not_before``（unix 秒），

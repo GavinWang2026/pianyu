@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """合规边界与出口安全 —— 「可控的全网解析」的落地点。
 
 原版 AVD 的服务端会代用户抓取任意 URL（``/api/thumb`` 可回显 SSRF），

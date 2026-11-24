@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """切片导出：按时间轴用 ffmpeg 精确切一段媒体。"""
 
 from __future__ import annotations

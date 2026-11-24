@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """缩略图缓存 —— 从 server.py 旁路收进融合层，与 hardening 限额共用。
 
 同一 URL 并发请求只发一次网络（in-flight 去重），其余等待首个结果。

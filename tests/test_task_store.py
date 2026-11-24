@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
 """统一任务内核 + SQLite 持久化回归。"""
 
 from __future__ import annotations

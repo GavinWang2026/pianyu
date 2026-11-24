@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """把 ASR 运行时从「外卷软链」实体化为「包内自包含」。
 
 背景（2026-11-12 实测）：原发布包的 ``.venv-asr/lib/python3.13/site-packages``

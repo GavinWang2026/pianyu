@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """分发出口：Notion / 飞书 webhook 直推（标准库 urllib）。
 
 只推本地已生成的 Markdown；不替用户登录第三方、不存第三方 Cookie。

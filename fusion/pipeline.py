@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """一键流水线 —— 把「两个程序」真正接成「一条产线」。
 
 原版四个动作（parse / download / asr / polish）是四个独立 POST、各自跑一遍

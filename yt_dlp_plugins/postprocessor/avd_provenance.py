@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """官方扩展点示例：给每条 info 挂上 AVD 溯源字段。
 
 这是「上游零改动定制」的实证 —— 通过 yt_dlp_plugins 命名空间包注入，

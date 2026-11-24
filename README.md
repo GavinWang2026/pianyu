@@ -1,11 +1,42 @@
-# 素材工作台
+# 片语 · Pianyu
 
-把你有权处理的素材收进本地：粘贴链接 → 选择画质 → 保存到本机。
+> 一条链接，片语成章。
+> 把你有权处理的音视频收进本机，再把里面的话变成能用的文字。
+> **解析 → 下载 → 字幕/转写 → 整理 → 结构化文案**，一条产线跑完，全程本机运行。
 
-还能**把视频里的语音转成文字稿**：有字幕的直接抓字幕（秒出、零误差），没字幕的才跑语音识别；
-转完还能接本机大模型做**标点修复、语义分段、摘要与关键词**。
+[![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#环境要求)
+[![Dependencies](https://img.shields.io/badge/%E4%B8%BB%E7%A8%8B%E5%BA%8F-%E9%9B%B6%E7%AC%AC%E4%B8%89%E6%96%B9%E4%BE%9D%E8%B5%96-orange.svg)](#环境要求)
 
-全程本地运行，**数据不出本机** —— 解析、下载、转写、整理都在你自己的电脑上完成。
+![界面预览](docs/preview.png)
+
+**它解决什么问题**：一个两小时的访谈视频，你想拿里面的内容改稿 —— 现在的流程是「下载 → 转文字 → 自己排版 → 再整理成稿」，四五个工具来回倒。片语把这条链路收成一个本地页面：粘链接、点一下，最后拿到一份带章节和摘要的 Markdown。
+
+**它不做什么**：不分发、不上传、不中转，不做批量搬运。
+
+---
+
+## 为什么是本地
+
+| | 云端工具 | 片语 |
+|---|---|---|
+| 音视频文件 | 上传到对方服务器 | 只在本机磁盘 |
+| 转写 | 依赖网络与配额 | 本机推理，断网可用 |
+| 数据留存 | 取决于对方隐私政策 | 你自己决定什么时候删 |
+| 成本 | 按时长/次数计费 | 一次装好，跑多少都不额外花钱 |
+
+---
+
+## 核心能力
+
+- **字幕优先**：视频自带字幕时直接抓文本，**秒出且零误差**（不过语音识别，不会有错别字）
+- **双识别引擎**：Apple 芯片走 MLX（快），其它平台走 Faster-Whisper，模型 `large-v3-turbo`
+- **文案整理**：接本机 Ollama / LM Studio 或任意 OpenAI 兼容接口，做标点修复、语义分段、摘要、关键词
+- **结构化输出**：导出 `.md` / `.srt` / `.txt` / `.json` / `.docx` / `.pdf`
+- **零第三方运行时依赖**：主程序只用 Python 标准库，下载引擎 yt-dlp 内嵌
+
+---
 
 ## 使用边界
 
@@ -21,6 +52,8 @@
 
 请勿用于绕过付费墙、批量搬运他人作品，或任何侵犯版权的用途。
 工具本身不经任何服务器中转数据，也不提供内容检索或分发能力。
+
+---
 
 ## 界面预览
 
@@ -207,7 +240,7 @@
 ## 目录结构
 
 ```
-VedioDawnload/
+Pianyu/
 ├── start.command          macOS / Linux 启动脚本
 ├── start.bat              Windows 启动脚本
 ├── setup-asr.command      文案提取环境安装（macOS / Linux）
@@ -327,3 +360,22 @@ VedioDawnload/
 本工具全程在你本机运行，不上传、不中转、不分发任何内容。
 
 请仅用于处理**你有权访问、有权处理**的内容，并遵守各平台的服务条款与版权规定。
+
+---
+
+## 许可证
+
+本项目以 **MIT License** 开源，见 [LICENSE](LICENSE)。
+
+内嵌的 yt-dlp（Unlicense）、语音识别权重（MIT / 上游基座 Apache-2.0）
+以及可选的 ASR 运行时依赖，各自按其原始许可执行，清单见 [NOTICE.md](NOTICE.md)，
+许可全文见 [LICENSES/](LICENSES/)。
+
+## 贡献
+
+欢迎提 Issue 与 PR。请注意三点：
+
+1. 不要提交任何真实 Cookie、账号凭据或他人版权内容；
+2. 涉及内嵌 yt-dlp 的改动请走 `yt_dlp_plugins/` 扩展点，不直接改 `vendor/` 下的上游源码；
+3. 提交前跑一遍 `python3 -m unittest discover -s tests -v` 与 `python3 verify_smoke.py`。
+

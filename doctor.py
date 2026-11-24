@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """旗舰版环境自检与离线修复（v2：发布包自包含）。
 
 v1 解决的是解释器断链：``.venv-asr/bin/python`` 指向已删除的 uv Python 3.13.8。

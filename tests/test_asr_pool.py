@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
 """ASR 常驻池：取消 / 心跳 / 排队语义回归（不启真实 Whisper）。"""
 
 from __future__ import annotations

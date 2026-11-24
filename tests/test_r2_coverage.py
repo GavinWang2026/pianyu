@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """R2 覆盖率补测 —— pipeline 模块级服务函数 + 降级模型。
 
 第九轮实测：pipeline 60% / task_store 59%，缺的恰好是「用户真的会点到的那些

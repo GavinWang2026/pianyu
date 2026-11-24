@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
 """交付前 secrets 扫描：打包产物不得含真实 Cookie / 会话字段（SEC-01）。
 
 用法::

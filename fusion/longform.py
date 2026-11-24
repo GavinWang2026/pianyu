@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """长素材分层摘要（map-reduce）+ 覆盖度与出处。
 
 两小时以上的访谈/课程一次性塞进 2400 字预算，必然丢掉后半程。这里按

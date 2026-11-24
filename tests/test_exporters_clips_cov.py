@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """切片导出与三方分发的覆盖补齐（P2-2 · 补测空白区）。
 
 报告点名的空白区：clips 32%、exporters 42%。两者都是「只在本机某条命令 /

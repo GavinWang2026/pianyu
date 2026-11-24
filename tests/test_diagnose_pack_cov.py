@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """诊断包模块的覆盖补齐（P2-2 · CI 门禁转绿）。
 
 第九轮报告指出 CI 覆盖率门禁自身为红：``diagnose_pack`` 67.4% < 70%。

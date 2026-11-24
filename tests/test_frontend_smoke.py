@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """D34：前端关键路径冒烟（静态契约 + 真实 HTTP 取页）。
 
 不依赖浏览器：校验前端调用的每个 /api 路由后端都注册了、每个 data-i18n

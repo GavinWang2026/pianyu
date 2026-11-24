@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """章节标题：有 LLM 一次调用生成 3–8 个；无 LLM 用 TF-IDF 前 3 词回退。"""
 
 from __future__ import annotations

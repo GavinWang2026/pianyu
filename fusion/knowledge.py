@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """结构化知识稿 —— 旗舰版里那个「>2」的产物。
 
 yt-dlp 单独只输出 MP4；AVD 原版单独只输出平铺 txt / SRT。

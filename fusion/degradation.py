@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """结构化降级模型 —— 「这份产出缺了什么、还能不能救、下一步做什么」。
 
 历史包袱：``task.degraded`` 曾是 ``list[str]``，前端只能把整句原文当徽标显示

@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """引擎装配与版本闸门。
 
 旗舰版把 yt-dlp 2026.10.26 的源码包**原样**内嵌在 ``vendor/yt_dlp/``

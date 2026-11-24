@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """ASR 常驻进程池 —— 复用已加载的 Whisper 权重，避免每任务冷启动 5–8 s。
 
 取消语义（v6 P0）：

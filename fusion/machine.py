@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """领域状态机骨架 —— 把四套 Manager 的阶段推进收成同一套规则。
 
 Manager 仍保留各自业务（下载/转写/整理/流水线），但：

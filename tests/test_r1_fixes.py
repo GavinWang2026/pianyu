@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """R1 修复的验收测试（第九轮报告 3 个 P1 + 5 个 P2）。
 
 每条用例对应报告里一条验收标准，全部可离线跑、不联网、不依赖 ASR 运行时：

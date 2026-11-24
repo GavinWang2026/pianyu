@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """融合层与 yt-dlp 之间的统一参数契约。
 
 实测背景（2026-11-12，抖音真实短链）：融合层原先自己拼 6 个固定参数，

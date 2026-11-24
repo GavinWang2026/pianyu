@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """结构化滚动日志 —— 供流水线 / 诊断 / 运维回看。
 
 默认写到 ``logs/avd.log``（相对项目根），按大小滚动，保留若干份。

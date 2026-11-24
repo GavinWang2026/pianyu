@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """统一版式描述（LayoutSpec）—— 一套 IR 同时渲染 Markdown / DOCX / PDF。
 
 R3 交付级文档：封面、目录、章节分页、页眉页脚语义由模板约定；

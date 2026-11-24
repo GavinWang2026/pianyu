@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """自动更新检查脚手架 —— 只探测，不自动下载安装。
 
 默认读环境变量 ``AVD_UPDATE_URL``（HTTPS JSON）；未配置则返回「未启用」。

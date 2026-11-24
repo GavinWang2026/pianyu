@@ -1,5 +1,6 @@
-# Copyright (c) 2026 Hyht-Team. All rights reserved.
-# See LICENSE (proprietary) and NOTICE.md (third-party components).
+# Copyright (c) 2026 Hyht-Team
+# SPDX-License-Identifier: MIT
+# See LICENSE (MIT) and NOTICE.md (third-party components).
 """旗舰版融合层回归测试（unittest，零第三方依赖、不联网）。
 
 覆盖：合规边界、结构化知识稿、一次解析全链复用、引擎版本闸门、官方插件扩展点。
