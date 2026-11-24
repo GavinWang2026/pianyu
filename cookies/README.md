@@ -1,6 +1,6 @@
 # Cookie 放置说明（平台站点解析用）
 
-> 完整人工获取 SOP 见 **`cookies/导出指引.md`**。体检：
+> 完整的人工获取 SOP 见 **`cookies/导出指引.md`**。体检：
 >
 > ```bash
 > python3 cookies/cookie_doctor.py --probe     # 体检（不回显 Cookie 值）
@@ -8,27 +8,27 @@
 >
 > 放置新鲜 Cookie 后，用界面「旗舰版 · 一键知识稿」或 `/api/platform/diagnose` 复验。
 >
-> **发布卫生**：发布包默认只含本说明与占位 `cookies.txt` 模板，**不含真实凭据**。
-> 打包前可运行 `python3 tools/secrets_scan.py --strict`；
+> **仓库卫生**：仓库与发布包只包含本说明与占位的 `cookies.txt` 模板，**不含任何真实凭据**。
+> 出包前可运行 `python3 tools/secrets_scan.py --strict`；
 > `*.rtf` / `*.har` / `*.txt` 凭据文件已列入 `.gitignore`。
 
 部分平台（实测：抖音 / TikTok 系）要求浏览器验证挑战生成的 `s_v_web_id`，
-服务端直接请求其 Web detail API 会返回 403。旗舰版已接通两条官方 Cookie 通道，
+服务端直接请求其 Web detail API 会返回 403。片语已接通两条官方 Cookie 通道，
 **都不需要修改 yt-dlp 源码**：
 
 | 通道 | 怎么配 | 适合场景 |
 |---|---|---|
-| 浏览器 Cookie | 界面「设置 → Cookie 来源」选 Chrome / Edge / Firefox / Safari | 开发机、有桌面浏览器 |
-| `cookies.txt` | 把 Netscape 格式文件放到本目录，命名为 `cookies.txt` | 交付机、无浏览器、断网验收 |
+| 浏览器 Cookie | 界面「设置 → Cookie 来源」选 Chrome / Edge / Firefox / Safari | 有桌面浏览器 |
+| `cookies.txt` | 把 Netscape 格式文件放到本目录，命名为 `cookies.txt` | 无浏览器、断网环境 |
 
-也可以用环境变量 `AVD_COOKIE_FILE` 指向**发布包内**的另一份 cookie 文件：
+也可以用环境变量 `AVD_COOKIE_FILE` 指向**项目目录内**的另一份 cookie 文件：
 
 ```bash
-AVD_COOKIE_FILE="/path/to/AVD-Flagship-v2/cookies/custom.txt" python3 boot.py
+AVD_COOKIE_FILE="/path/to/pianyu/cookies/custom.txt" python3 boot.py
 ```
 
-> 安全约束：cookie 文件必须位于发布包目录内（由 `fusion/guards.within()` 强制校验）。
-> 指向包外文件会被忽略——防止把本机任意文件当作 Cookie 发到远端造成数据外带。
+> 安全约束：cookie 文件必须位于项目目录内（由 `fusion/guards.within()` 强制校验）。
+> 指向目录外的文件会被忽略——防止把本机任意文件当作 Cookie 发到远端造成数据外带。
 
 ## cookies.txt 格式（Netscape / curl jar）
 
@@ -59,6 +59,6 @@ curl -s -X POST http://127.0.0.1:8760/api/platform/diagnose \
 
 ## 隐私与合规
 
-- 本目录**不要提交到 Git**（`.gitignore` 已排除 `cookies/*.txt`）；
+- 本目录的凭据文件**不要提交到 Git**（`.gitignore` 已排除 `cookies/*.txt`）；
 - 只放置处理**自有或已获授权素材**所需的 Cookie；
-- 不要把含登录态的 Cookie 附在对外发布包里；交付前清空本目录下所有 `.txt`。
+- 不要把含登录态的 Cookie 附在对外发布包里；发布前清空本目录下所有 `.txt`。

@@ -358,6 +358,18 @@ Pianyu/
 
 ---
 
+## 更多文档
+
+| 文档 | 内容 |
+|---|---|
+| [README-FLAGSHIP.md](README-FLAGSHIP.md) | 完整工作台：启动与自检、环境变量、上传预检、威胁模型 |
+| [CAPABILITIES.md](CAPABILITIES.md) | 能力矩阵与使用边界——每条能力都写明它做不到什么 |
+| [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) | 平台支持矩阵：哪些实测过，哪些只是脚本齐备 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+| [NOTICE.md](NOTICE.md) | 第三方组件与许可证清单 |
+
+---
+
 ## 许可证
 
 本项目以 **MIT License** 开源，见 [LICENSE](LICENSE)。
