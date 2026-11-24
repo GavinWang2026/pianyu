@@ -98,6 +98,20 @@ UI、交互、业务编排、合规话术、文字稿结构化均为自主研发
 | ffmpeg / ffprobe | 由用户系统 PATH 提供，本包**未捆绑**任何二进制 | LGPL/GPL，取决于编译开关 |
 | CPython 3.13 | 由用户系统提供；换机器由 `doctor.py --repair` 自动重接解释器 | PSF License |
 
+### 2.5 许可归属速查
+
+本仓库根目录 `LICENSE` 为纯 MIT 正文，仅覆盖 Hyht-Team 自主研发部分。
+下列资产由第三方提供，**不适用** `LICENSE`，各自按其原始许可执行：
+
+| 资产 | 位置 | 许可 |
+|---|---|---|
+| yt-dlp 2026.10.26 源码副本 | `vendor/yt_dlp/` | Unlicense |
+| Python 运行时依赖 | `runtime/site-packages/` | 各自开源许可（见 2.2 表） |
+| 语音识别权重 | `models/` | MIT（上游基座 Apache-2.0，全文见 `LICENSES/`） |
+| ffmpeg | 由用户系统提供 | 本仓库未捆绑二进制 |
+
+使用本软件即表示你理解：本工具仅用于处理你**有权访问、有权处理**的内容。
+
 ---
 
 ## 3. 许可要点（务请保留）
