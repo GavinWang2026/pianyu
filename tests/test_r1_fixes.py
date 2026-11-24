@@ -69,7 +69,7 @@ class CookieOutOfPackageTests(unittest.TestCase):
     """P1-1：包内 cookies.txt 只读，yt-dlp 回写落在 .state。"""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.base = Path(self.tmp.name)
         self._orig_file = os.environ.get("AVD_COOKIE_FILE")
         self._orig_state = os.environ.get("AVD_STATE_DIR")
@@ -137,7 +137,7 @@ class RetentionScopeTests(unittest.TestCase):
     """P1-2：保留策略只裁剪自己的 output_root，且不在热路径上重复执行。"""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.base = Path(self.tmp.name)
         self.root = self.base / "outputs" / "pipeline"
         self.root.mkdir(parents=True)
@@ -191,7 +191,7 @@ class DownloadReuseTests(unittest.TestCase):
     """P1-3：下载后处理异常时复用已落盘媒体，不重下、不谎报。"""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name) / "pipeline"
         self.root.mkdir(parents=True)
 
@@ -249,7 +249,7 @@ class LowContentTests(unittest.TestCase):
     """P2-1：单段片头素材不得当成知识稿。"""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name) / "pipeline"
         self.root.mkdir(parents=True)
 

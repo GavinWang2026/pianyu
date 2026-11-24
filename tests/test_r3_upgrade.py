@@ -172,7 +172,7 @@ class LibraryEvalTests(unittest.TestCase):
     def test_eval_set_hits_recall_and_citation(self) -> None:
         fixture = json.loads(
             (ROOT / "tests" / "fixtures" / "library_eval.json").read_text(encoding="utf-8"))
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "eval.db")
             try:
                 for m in fixture["materials"]:

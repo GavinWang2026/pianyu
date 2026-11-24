@@ -101,7 +101,7 @@ class LlmPathMockTests(unittest.TestCase):
 
     def test_library_answer_llm_mock_with_sources(self) -> None:
         from fusion import library
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             library.upsert_material(
                 task_id="t1",

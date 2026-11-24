@@ -320,7 +320,7 @@ class UploadPreflightTests(unittest.TestCase):
         boot_check.activate()
         import server
         self.server = server
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.orig_dir = server.UPLOAD_DIR
         self.orig_quota = server.UPLOAD_QUOTA_BYTES
         server.UPLOAD_DIR = Path(self.tmp.name)

@@ -249,7 +249,7 @@ class RegistryApiTests(unittest.TestCase):
 
 class PersistTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = Path(self.tmp.name) / "t.sqlite3"
         persist.reset_for_tests(self.db)
 

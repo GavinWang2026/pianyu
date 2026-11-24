@@ -83,7 +83,7 @@ class FakeHandler:
 
 class ApiRouteTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name)
         persist.reset_for_tests(self.root / "tasks.sqlite3")
         library.reset_for_tests(self.root / "lib.sqlite3")

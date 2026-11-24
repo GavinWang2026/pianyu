@@ -78,7 +78,7 @@ class GuardsTests(unittest.TestCase):
     def setUp(self) -> None:
         self._orig = guards._resolved_ips
         guards._resolved_ips = lambda host: []  # 单测不碰 DNS
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.base = Path(self.tmp.name)
 
     def tearDown(self) -> None:
@@ -299,7 +299,7 @@ class PipelineTests(unittest.TestCase):
     def setUp(self) -> None:
         self._orig = guards._resolved_ips
         guards._resolved_ips = lambda host: []
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name)
         # 单测不碰本机 Obsidian 配置
         self._obs = pipeline.resolve_obsidian_dir
@@ -810,7 +810,7 @@ class StageMethodTests(unittest.TestCase):
     """D30：阶段级测试，直接调用拆分后的方法，不依赖整条线程链。"""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name)
         from fusion import persist
         persist.reset_for_tests(self.root / "stage.sqlite3")
@@ -925,7 +925,7 @@ class UpdatesAndClipsTests(unittest.TestCase):
 
     def test_clip_rejects_bad_range(self) -> None:
         from fusion import clips
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             src = Path(tmp) / "a.mp4"
             src.write_bytes(b"not-a-real-mp4")
             with self.assertRaises(ValueError):
@@ -1077,7 +1077,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import library
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             library.upsert_material(
                 task_id="t1", title="短视频增长", body="本地优先的短视频运营方法论",
@@ -1095,7 +1095,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import library
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             body = ("前言" * 40) + "转化路径是核心增长杠杆" + ("后记" * 40)
             library.upsert_material(
@@ -1112,7 +1112,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import library
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             library.upsert_material(
                 task_id="p1", title="转化率", body="本周转化率达到 100% 目标", tags=[],
@@ -1133,7 +1133,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import zipfile
         from pathlib import Path
         from fusion import diagnose_pack
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             dest = Path(tmp) / "diag.zip"
             result = diagnose_pack.build_diagnose_pack(task_id="..", dest=dest)
             self.assertTrue(dest.is_file())
@@ -1152,7 +1152,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import library
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             library.upsert_material(
                 task_id="b1", title="A", body="正文", tags=["旧"],
@@ -1174,7 +1174,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import io
         from pathlib import Path
         from fusion import library, pdf_cjk
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             library.reset_for_tests(Path(tmp) / "lib.sqlite3")
             library.upsert_material(
                 task_id="bk1", title="第一篇", body="转化路径与增长",
@@ -1251,7 +1251,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import diagnose_pack
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             dest = Path(tmp) / "pack.zip"
             result = diagnose_pack.build_diagnose_pack(task_id="", dest=dest)
             ticket = result["ticket_id"]
@@ -1267,7 +1267,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import diagnose_pack, recovery
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             proof = recovery.prove_resume(tmp, chunks_total=4, cancel_after=1)
             self.assertTrue(proof["ok"])
             self.assertGreater(proof["resume_chunk"], 0)
@@ -1294,7 +1294,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import checkpoint
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             p = checkpoint.save_checkpoint(
                 tmp, task_id="x", chunk_index=1, chunks_total=3,
                 segments=[{"text": "hi"}], duration=10,
@@ -1489,7 +1489,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import persist
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             persist.reset_for_tests(root / "avd_tasks.sqlite3")
             info = dict(SAMPLE_INFO)
@@ -1525,7 +1525,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from fusion import persist
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             (root / "a.md").write_text("keep", encoding="utf-8")
             big = root / "clip.mp4"
@@ -1542,7 +1542,7 @@ class SchedulerMachineExporterTests(unittest.TestCase):
         import zipfile
         from pathlib import Path
         from fusion import diagnose_pack
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             dest = root / "d.zip"
             r1 = diagnose_pack.build_diagnose_pack(task_id="nope!!", dest=dest)
